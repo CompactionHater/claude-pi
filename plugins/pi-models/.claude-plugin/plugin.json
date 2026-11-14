@@ -1,6 +1,6 @@
 {
   "name": "pi-models",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Use any model served by an Anthropic-compatible Messages endpoint (vLLM, llama.cpp, Ollama, LM Studio, a gateway) side by side with Claude. Every step whose model id starts with local/ is answered by the server the user configures; every other step goes to Claude untouched.",
   "license": "MIT",
   "repository": "https://github.com/CompactionHater/claude-pi",

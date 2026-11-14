@@ -222,18 +222,6 @@ const LOCAL_TOOL_SCHEMAS = [
     },
   },
   {
-    name: 'WebSearch',
-    parameters: {
-      type: 'object',
-      properties: {
-        query: str('The search query'),
-        allowed_domains: { type: 'array', items: { type: 'string' }, description: 'Only include results from these domains' },
-        blocked_domains: { type: 'array', items: { type: 'string' }, description: 'Never include results from these domains' },
-      },
-      required: ['query'],
-    },
-  },
-  {
     name: 'WebFetch',
     parameters: {
       type: 'object',
@@ -298,8 +286,9 @@ const NOT_FOR_AGENTS = new Set(['Agent', 'AskUserQuestion'])
 // local model's tool list from the live tool set, parsing the schemas out of that file, so a Claude
 // Code update changes the local model's tools with it and nothing here needs re-copying.
 
-// Tools the local model is never given: ToolSearch has nothing to load here.
-const NOT_FOR_LOCAL = new Set(['ToolSearch'])
+// Tools the local model is never given: ToolSearch has nothing to load here, and WebSearch is Anthropic's
+// server-side search, which Claude Code sends under the session's model id: Anthropic rejects a local one.
+const NOT_FOR_LOCAL = new Set(['ToolSearch', 'WebSearch'])
 // Parameters the engine's real schema has that the generated type file lacks.
 const EXTRA_PROPS: Record<string, Record<string, Schema>> = {
   Agent: {

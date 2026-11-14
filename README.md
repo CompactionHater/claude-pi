@@ -95,11 +95,12 @@ Name Claude agents' models by full id (`claude-sonnet-5-5`), not alias: under a 
 
 **Auto mode:** Claude Code 2.1.325 returns auto mode's safety verdict inside Claude's own response, so your model's tool calls would all be refused. `CLAUDE_CODE_AUTO_MODE_SERVER=0` (step 2) runs the check as a separate Claude request per checked call, for Claude sessions too. Other permission modes need no setting. If a later Claude Code drops its own check, use another permission mode for your model.
 
-**What still goes to Anthropic:** your model's steps go only to your endpoint, but Claude Code still needs a Claude login or API key and makes its own requests: auto mode's checks, WebSearch, background requests. It doesn't run Claude Code offline.
+**What still goes to Anthropic:** your model's steps go only to your endpoint, but Claude Code still needs a Claude login or API key and makes its own requests: auto mode's checks and background requests. It doesn't run Claude Code offline.
 
 **Limits:**
 
 - Outside Code Mode your model gets Claude Code's own tools, not MCP or plugin tools; in Code Mode it reaches them through REPL.
+- No WebSearch: it is Anthropic's server-side search, sent under your model's id, which Anthropic rejects. Your model can fetch pages with WebFetch or `curl`, and in Code Mode it can call a search MCP server (SearXNG, for example) by name.
 - Until one Claude request has gone out with `pi-models` on, a session that starts on your model sees the first 300 characters of each tool's description.
 - Local agents are read from `.claude/agents` and `~/.claude/agents`, not from plugins.
 - Needs `curl` on your PATH, and `sh` for requests over 2,000,000 characters. The key goes to curl on its standard input, never on a command line; for a request over 2,000,000 characters it also passes through that `sh` process's environment, which only your own user can read.
