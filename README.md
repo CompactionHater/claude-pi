@@ -8,20 +8,20 @@ The first request of a session, in characters (about four to a token), measured 
 
 | | Claude Code | With Claude-Pi | Saved |
 |---|---|---|---|
-| Opus 5.5 | 52,200 | 16,600 | 68% |
-| Sonnet 5.5 | 51,800 | 16,600 | 68% |
-| Fable 5.2 | 56,600 | 21,100 | 63% |
+| Opus 5.5 | 52,200 | 26,900 | 49% |
+| Sonnet 5.5 | 51,800 | 26,900 | 48% |
+| Fable 5.2 | 56,600 | 31,400 | 45% |
 
 Where it comes from, on Sonnet 5.5:
 
 | Part | Claude Code | With Claude-Pi |
 |---|---|---|
-| Tool schemas | 35,000, 12 tools | 6,500: Read, Bash, Edit, Write and ToolSearch |
+| Tool schemas | 35,000, 12 tools | 16,700: Read, Bash, Edit, Write, Agent, AskUserQuestion and ToolSearch |
 | Bash's description alone | 1,860 | 160, from pi |
 | First message | 10,900, mostly the skill and agent listings | 4,600: bundled skills hidden from the model |
-| System prompt | 6,000 | 5,500 |
+| System prompt | 6,000 | 5,600 |
 
-A project's CLAUDE.md and your own skills add the same to both. MCP servers add less with Claude-Pi, which puts their tools behind ToolSearch.
+A project's CLAUDE.md, your own skills and MCP servers add the same to both.
 
 ## Install
 
@@ -37,8 +37,8 @@ Install one or both, then run `/reload-plugins` or start a new session. Needs Cl
 
 ## The lean harness (`pi`)
 
-- **Tools:** Read, Bash, Edit and Write go out in full with short descriptions taken from pi, plus ToolSearch. Every other tool (Agent, WebSearch, MCP tools and the rest) is one ToolSearch away, and still works.
-- **System prompt:** Claude-Pi keeps Claude Code's own prompt but drops the sections on pronouns and on recreating existing games, and the lines about Claude Code's apps and fast mode. It adds rules taken from pi: Bash for `ls`, `rg` and `find`; Read instead of `cat` or `sed`; Edit for targeted changes; Write only for new files or rewrites; be concise; show file paths.
+- **Tools:** Read, Bash, Edit and Write go out in full with short descriptions taken from pi. Agent (with its `model` and `effort`), AskUserQuestion and ToolSearch go out as Claude Code sends them. Five tools few tasks need (Skill, ListAgents, Workflow, ScheduleWakeup, ReportFindings) move behind ToolSearch, and Claude-Pi's rules name them so the model can load them. The rest stay where Claude Code puts them: Monitor, WebSearch, MCP tools and others are one ToolSearch away and named in Claude Code's own list.
+- **System prompt:** Claude-Pi keeps Claude Code's own prompt but drops the sections on pronouns and on recreating existing games, and the lines about Claude Code's apps and fast mode. It adds rules taken from pi: Bash for `ls`, `rg` and `find`; Read instead of `cat` or `sed`; Edit for targeted changes; Write only for new files or rewrites; be concise; show file paths. One more rule names the five tools it moved behind ToolSearch.
 - **Skills:** Claude Code's bundled skills (dataviz, claude-api, code-review, simplify, loop, run, init and others) are hidden from the model and stay typable as `/name`. To list one for the model again, set it to `"on"` under `skillOverrides` in `~/.claude/settings.json`, for example `{ "skillOverrides": { "dataviz": "on" } }`. Your own and your plugins' skills are listed as before.
 - **First message:** CLAUDE.md only, without your email and the other context blocks.
 - **Auto mode:** its note to read and edit files through Bash is left out, since Claude-Pi's rules say Read and Edit.

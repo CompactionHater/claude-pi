@@ -8,7 +8,7 @@
     {
       "name": "pi",
       "source": "./plugins/pi",
-      "description": "Claude Code with pi's lean harness: five tools in full with pi's descriptions and rules, every other tool one ToolSearch away, bundled skills hidden from the model, CLAUDE.md as the only added context, and a trimmed system prompt. Works in Code Mode."
+      "description": "Claude Code with pi's lean harness: pi's tool descriptions and rules, five rarely used tools moved behind ToolSearch, bundled skills hidden from the model, CLAUDE.md as the only added context, and a trimmed system prompt. Works in Code Mode."
     },
     {
       "name": "pi-models",

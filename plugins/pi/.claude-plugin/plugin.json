@@ -1,7 +1,7 @@
 {
   "name": "pi",
-  "version": "0.2.1",
-  "description": "Claude Code with pi's lean harness: five tools in full with pi's descriptions and rules, every other tool one ToolSearch away, bundled skills hidden from the model, CLAUDE.md as the only added context, and a trimmed system prompt. Works in Code Mode.",
+  "version": "0.2.2",
+  "description": "Claude Code with pi's lean harness: pi's tool descriptions and rules, five rarely used tools moved behind ToolSearch, bundled skills hidden from the model, CLAUDE.md as the only added context, and a trimmed system prompt. Works in Code Mode.",
   "license": "MIT",
   "repository": "https://github.com/CompactionHater/claude-pi",
   "keywords": [

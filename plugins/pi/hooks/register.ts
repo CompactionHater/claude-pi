@@ -1,10 +1,10 @@
 import type { Register } from 'claude-code'
 
 // claude-pi: Claude Code with the lean harness of pi (github.com/earendil-works/pi, MIT).
-// Pi's tool descriptions and rules, project instructions as the only context, and a short tool list
-// in front; every other tool stays one ToolSearch away, and Claude Code's bundled skills are hidden from
-// the model. Claude Code's own lean prompt is kept where the model has one, without its off-topic parts;
-// the long prompt older models get is replaced by Pi's. Works in Code Mode too.
+// Pi's tool descriptions and rules, project instructions as the only context, five rarely used tools
+// moved behind ToolSearch, and Claude Code's bundled skills hidden from the model. Claude Code's own
+// lean prompt is kept where the model has one, without its off-topic parts; the long prompt older models
+// get is replaced by Pi's. Works in Code Mode too.
 
 // Pi's tool descriptions, adapted where Claude Code's parameters differ: Edit takes
 // old_string/new_string (Pi: edits[]), Bash's timeout is in milliseconds (Pi: seconds).
@@ -21,6 +21,8 @@ const SNIPPETS: Record<string, string> = {
   Bash: 'Execute bash commands (ls, grep, find, etc.)',
   Edit: 'Make precise file edits with exact text replacement',
   Write: 'Create or overwrite files',
+  Agent: 'Run a task in a subagent, with its own model and effort',
+  AskUserQuestion: 'Ask the user to choose between options',
   ToolSearch: 'Load a tool that is not listed here, by name or keyword',
 }
 
@@ -33,9 +35,11 @@ const GUIDELINES: Record<string, string> = {
   REPL: 'Use REPL to batch independent tool calls (Promise.all), chain them, or filter large output, instead of many separate calls.',
 }
 
-// Tools whose schemas stay in the prompt: Pi's four, ToolSearch to reach the rest, Code Mode's two,
-// ExitPlanMode so plan mode can end, and SubagentHandback so a subagent can report without loading it.
-const IN_FRONT = new Set(['Read', 'Bash', 'Edit', 'Write', 'ToolSearch', 'REPL', 'Poll', 'ExitPlanMode', 'SubagentHandback'])
+// Tools Claude Code sends in full that pi moves behind ToolSearch. Claude Code's deferred-tools note names
+// only the tools it defers itself, so pi's rules name these; every other tool keeps Claude Code's placement
+// (Agent and AskUserQuestion in front, the rest it defers named in its note). shortcut: Claude Code
+// 2.1.325's list; a tool a later version sends in full stays in front until it is added here.
+const PI_DEFERS = new Set(['ListAgents', 'ReportFindings', 'ScheduleWakeup', 'Skill', 'Workflow'])
 // Engine sections kept under Pi's prompt: auto memory's instructions, a chosen output style, the
 // note that a long conversation is summarized rather than ended, the "act, don't re-derive" line and
 // the token countdown (CLAUDE_CODE_TOTAL_TOKENS_REMINDER).
@@ -82,7 +86,7 @@ export const register: Register = on => {
   on('tool.describe', async (_$, e, next) => {
     const r = await next(e)
     const description = DESCRIPTIONS[e.tool] ?? r.description
-    return IN_FRONT.has(e.tool) ? { ...r, description } : { ...r, description, isDeferred: true }
+    return PI_DEFERS.has(e.tool) ? { ...r, description, isDeferred: true } : { ...r, description }
   })
 
   // The first message carries project instructions (CLAUDE.md) only: no date, email or account context.
@@ -94,8 +98,10 @@ export const register: Register = on => {
   on('prompt.compose', async ($, e, next) => {
     const { sections } = await next(e)
     if (e.traits.includes('bare')) return { sections }
+    const deferred = e.tools.filter(t => PI_DEFERS.has(t)).sort()
     const rules = [
       ...Object.keys(GUIDELINES).filter(t => e.tools.includes(t)).map(t => GUIDELINES[t]),
+      ...(deferred.length > 0 ? [`Also behind ToolSearch, loaded with "select:<name>" before use: ${deferred.join(', ')}`] : []),
       'Be concise in your responses',
       'Show file paths clearly when working with files',
     ]
@@ -114,7 +120,7 @@ export const register: Register = on => {
       kept.splice(at === -1 ? kept.length : at, 0, rulesSection)
       return { sections: kept }
     }
-    const shown = e.tools.filter(t => IN_FRONT.has(t) && t in SNIPPETS)
+    const shown = e.tools.filter(t => t in SNIPPETS)
     const tools = shown.map(t => `- ${t}: ${SNIPPETS[t]}`).join('\n')
     return {
       sections: [
