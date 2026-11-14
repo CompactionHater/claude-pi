@@ -71,7 +71,7 @@ Run the same command to change them later.
 }
 ```
 
-`model` is `local/` plus the name your server's `/v1/models` lists. `behavesAs` picks the Claude model whose handling Claude Code applies (effort levels, Code Mode); `claude-sonnet-5-5` gives both. The system prompt doesn't depend on it: every local model gets the same one, Claude Code's lean prompt as a Sonnet 5.5 row gets it, with pi's edits when pi is on (about 5,100 characters). Start a new session, then pick the row with `/model`.
+`model` is `local/` plus the name your server's `/v1/models` lists. `behavesAs` is optional: the row shows in `/model` without it. It names the Claude model whose client-side handling applies, which decides whether Code Mode starts on the row (it needs a 5.5 model or Fable 5.2) and the default effort (medium for Sonnet 5.5, high without). The system prompt doesn't depend on it: every local model gets the same one, Claude Code's lean prompt as a Sonnet 5.5 row gets it, with pi's edits when pi is on (about 5,100 characters). Start a new session, then pick the row with `/model`.
 
 **3. Set its context window:** with the row picked, run `/autocompact 128k`, using the length your server serves (vLLM's `--max-model-len`). Without it, the row gets the window of the model in `behavesAs`: 1M for Sonnet 5.5. Claude Code accepts 100k to 1M and saves it for that row only.
 
