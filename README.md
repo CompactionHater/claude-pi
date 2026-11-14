@@ -1,11 +1,26 @@
 # claude-pi
 
-Two mods for Claude Code, installed with slash commands:
+Claude Code with the lean harness of [pi](https://github.com/earendil-works/pi), plus any Anthropic-compatible model beside Claude. Two mods, installed with slash commands: no launcher, no patched binary.
 
-- **pi** gives Claude Code the lean harness of [pi](https://github.com/earendil-works/pi): a short tool list with pi's tool descriptions and rules, CLAUDE.md as the only context added to your first message, and pi's system prompt where Claude Code would send its long one.
-- **pi-models** lets you use any model served by an Anthropic-compatible endpoint (vLLM, llama.cpp, Ollama, LM Studio, a gateway) beside Claude, as the main model or as an agent.
+## What pi saves
 
-Each works on its own, and they work together. Neither needs a launcher script or a patched binary: both use Claude Code's mods API.
+The first request of a session, in characters (about four to a token), measured on Claude Code 2.1.325 in an empty folder:
+
+| | Claude Code | With pi | Saved |
+|---|---|---|---|
+| Opus 5.5 | 52,200 | 16,600 | 68% |
+| Sonnet 4.6 | 89,700 | 26,900 | 70% |
+
+Where it comes from, on Opus 5.5:
+
+| Part | Claude Code | With pi |
+|---|---|---|
+| Tool schemas | 34,700 | 6,500: Read, Bash, Edit, Write and ToolSearch |
+| Bash's description alone | 1,900 | 160, pi's |
+| First message | 11,300, mostly the skill and agent listings | 4,600: bundled skills hidden from the model |
+| System prompt | 6,200 | 5,500 |
+
+A project's CLAUDE.md and your own skills add the same to both. MCP servers add less with pi, which puts their tools behind ToolSearch.
 
 ## Install
 
@@ -17,90 +32,50 @@ In a Claude Code session:
 /plugin install pi-models@claude-pi
 ```
 
-Install one or both. Then run `/reload-plugins`, or start a new session. Needs Claude Code 2.1.323 or later; tested on 2.1.325.
+Install one or both, then run `/reload-plugins` or start a new session. Needs Claude Code 2.1.325 or later.
 
-## pi: a lean harness
+## pi
 
-| | Claude Code | With pi |
-|---|---|---|
-| System prompt on Opus 4.8 and later, Sonnet and Haiku 5.5, Fable, and models Claude Code doesn't know | Claude Code's lean prompt, about 6,200 characters | The same without its off-topic sections (pronouns, and recreating existing games where the model has it), plus pi's rules: about 5,900 |
-| System prompt on older models | Claude Code's long prompt, about 27,500 characters | pi's prompt: one role line, a tool list, a few rules, the working directory, plus Claude Code's sections listed below |
-| Tools sent with every request, on Opus 5.5 | 12 tools, about 34,700 characters of schemas | Read, Bash, Edit, Write and ToolSearch, about 6,500 characters |
-| Other tools | Some behind ToolSearch | All behind ToolSearch: the model loads one when it needs it |
-| Context in the first message | CLAUDE.md, your email, today's date | CLAUDE.md only |
-| Tool descriptions | Claude Code's | pi's, adapted to Claude Code's parameters |
+- **Tools:** Read, Bash, Edit and Write go out in full with pi's short descriptions, plus ToolSearch. Every other tool (Agent, WebSearch, MCP tools and the rest) is one ToolSearch away, and still works.
+- **System prompt:** where Claude Code sends its lean prompt (Opus 4.8 and later, the 5.5 models, Fable, models it doesn't know, and always in Code Mode), pi keeps it but drops the sections on pronouns and on recreating existing games, and the lines about Claude Code's apps and fast mode. It adds pi's rules: Bash for `ls`, `rg` and `find`; Read instead of `cat` or `sed`; Edit for targeted changes; Write only for new files or rewrites; be concise; show file paths. On older models it replaces Claude Code's long prompt (27,500 characters) with pi's short one, keeping auto memory, output style, the compaction note, the "act, don't re-derive" line and the token countdown.
+- **Skills:** Claude Code's bundled skills (dataviz, claude-api, code-review, simplify, loop, run, init and others) are hidden from the model and stay typable as `/name`. To list one for the model again, set it to `"on"` under `skillOverrides` in `~/.claude/settings.json`, for example `{ "skillOverrides": { "dataviz": "on" } }`. Your own and your plugins' skills are listed as before.
+- **First message:** CLAUDE.md only, without your email and the other context blocks.
+- **Auto mode:** its note to read and edit files through Bash is left out, since pi's rules say Read and Edit.
 
-Measured on Claude Code 2.1.325 in an interactive session in an empty folder: the first request's prompt, tools and context go from about 52,200 characters to 23,800 on Opus 5.5, and from about 89,700 to 33,200 on Sonnet 4.6. On Sonnet 4.6 most of the saving is tools: pi's prompt keeps auto memory's instructions, which are about 12,800 characters there. A project's CLAUDE.md and skills add the same to both; MCP servers add less with pi, which puts their tools behind ToolSearch.
+Permissions, hooks, slash commands, subagents and other mods' prompt sections are unchanged. The lean prompt is kept because it is short and about coding: ZCode, the top harness on [FrontierHarness](https://frontierharness.org) v1.1, sends almost the same text. Claude Code still adds a few lines mods can't reach, such as the commit attribution reminder.
 
-Claude Code's lean prompt is kept because it is already short and almost all of it is about coding, and because ZCode, the top harness across five open models on [FrontierHarness](https://frontierharness.org) v1.1, sends every model almost the same text. pi removes its sections that aren't about coding and adds its own rules: use Bash for `ls`, `rg` and `find`, Read instead of `cat`, Edit for targeted changes, Write only for new files or rewrites, be concise, and show file paths. Where pi's prompt replaces the long one, it keeps these sections of Claude Code's: auto memory's instructions, a chosen output style, the note that a long conversation is summarized rather than ended, "when you have enough information to act, act", and the token countdown below.
+To save more, `"autoMemoryEnabled": false` in your settings turns off auto memory and its instructions: 2,300 characters on Opus 5.5, 12,800 on Sonnet 4.6.
 
-Kept as they are:
+## pi-models
 
-- Every tool still works. Agent, AskUserQuestion, WebSearch, Skill, MCP tools and the rest are one ToolSearch away.
-- Subagents keep their own prompts.
-- Other mods keep their prompt sections.
-- Permissions, hooks, skills, slash commands and CLAUDE.md are unchanged.
+pi-models sends every model step whose model id starts with `local/` to your server and leaves every other step to Claude. The text after `local/` is the model name your server is asked for. The server needs Anthropic's Messages API at `/v1/messages` with streaming and tool calls (in vLLM, `--enable-auto-tool-choice` and the model's `--tool-call-parser`), and at least 100,000 tokens of context. Tested with vLLM; llama.cpp, Ollama, LM Studio and LiteLLM offer the same endpoint but are untested.
 
-Claude Code still adds a few lines the mods API doesn't reach, such as notes for the Artifact and WebSearch tools and the commit attribution reminder.
+**1. Point it at your server:** run `/plugin configure pi-models@claude-pi` and enter:
 
-## pi-models: other models beside Claude
-
-pi-models answers every model step whose model id starts with `local/` by sending it to your server, and leaves every other step to Claude. The text after `local/` is the model name your server is asked for. Your server needs Anthropic's Messages API at `/v1/messages`, with streaming and tool calls turned on (in vLLM, `--enable-auto-tool-choice` and the model's `--tool-call-parser`), and a context of at least 100,000 tokens. Tested with vLLM; llama.cpp's server, Ollama, LM Studio and gateways such as LiteLLM offer the same endpoint but are untested.
-
-### 1. Point it at your server
-
-After installing, run:
-
-```
-/plugin configure pi-models@claude-pi
-```
-
-| Setting | What to enter |
-|---|---|
-| Messages endpoint | Your server's full Messages URL, for example `http://127.0.0.1:8000/v1/messages` on this machine or `http://<server-ip>:8000/v1/messages` on another. `https://` works too. |
-| API key | The key your server asks for, if any. Claude Code keeps it in its secure storage, not in `settings.json`. Leave it empty if the server needs none. Over `http://` the key crosses the network in clear text, so with a key use `https://` or a network you trust. |
-| Max output tokens | The most tokens one step may write. Default 32000. |
+- **Messages endpoint:** the full URL, for example `http://127.0.0.1:8000/v1/messages`.
+- **API key:** if your server asks for one; leave it empty if not. Claude Code keeps it in its secure storage. Over `http://` it crosses the network in clear text, so use `https://` or a network you trust.
+- **Max output tokens:** per step, default 32000.
 
 Run the same command to change them later.
 
-### 2. Add the model to `/model`
-
-Add a row for each model to `modelPicker` in `~/.claude/settings.json`, and the auto mode setting explained below. If the file already has an `env` block, add the key to it rather than a second block:
+**2. Add the model to `/model`** in `~/.claude/settings.json`. If the file already has an `env` block, add the key to it rather than a second block:
 
 ```json
 {
   "modelPicker": {
     "options": [
-      {
-        "model": "local/Qwen/Qwen3-Coder-30B-A3B-Instruct",
-        "label": "Qwen3 Coder (local)",
-        "behavesAs": "claude-sonnet-5-5"
-      }
+      { "model": "local/Qwen/Qwen3-Coder-30B-A3B-Instruct", "label": "Qwen3 Coder (local)", "behavesAs": "claude-sonnet-5-5" }
     ]
   },
   "env": { "CLAUDE_CODE_AUTO_MODE_SERVER": "0" }
 }
 ```
 
-- `model`: `local/` followed by the exact name your server serves the model under, as its `/v1/models` lists it.
-- `label`: what `/model` shows.
-- `behavesAs`: the Claude model whose handling Claude Code applies to this row: prompt style, effort levels and Code Mode support. It changes nothing that is sent. `claude-sonnet-5-5` gives the row the `/effort` levels and lets Code Mode start on it.
+`model` is `local/` plus the name your server's `/v1/models` lists. `behavesAs` picks the Claude model whose handling Claude Code applies (prompt style, effort levels, Code Mode); nothing sent changes. Use a 5.5 model: a row that behaves as an older one, such as Sonnet 4.6, gets the long-prompt path and its longer memory instructions, about 9,000 more characters per request. Start a new session, then pick the row with `/model`.
 
-Your Claude models stay in the list. Start a new session so the `env` setting applies, then pick the new row with `/model`, or start with `claude --model local/Qwen/Qwen3-Coder-30B-A3B-Instruct`.
+**3. Set its context window:** with the row picked, run `/autocompact 128k`, using the length your server serves (vLLM's `--max-model-len`). Without it, the row gets the window of the model in `behavesAs`: 1M for Sonnet 5.5. Claude Code accepts 100k to 1M and saves it for that row only.
 
-### 3. Set its context window
-
-`behavesAs` also gives the row that model's context window: 1M tokens for Sonnet 5.5. With the row picked, tell Claude Code your model's real window, the length your server serves it at (vLLM's `--max-model-len`):
-
-```
-/autocompact 128k
-```
-
-Claude Code saves it for that row only, under `modelSettings` in your settings, and compacts the conversation before it fills that window. Your Claude models keep their own windows. Run `/context` to check. Claude Code accepts 100k to 1M, so a model served with less than 100,000 tokens of context won't fit.
-
-### 4. Agents on your model (optional)
-
-Save an agent file such as `~/.claude/agents/local.md`:
+**4. Agents on your model (optional):** an agent file runs on your model, its body as the agent's instructions, for example `~/.claude/agents/local.md`:
 
 ```markdown
 ---
@@ -113,68 +88,31 @@ effort: high
 You are a worker agent. Do exactly the task in the prompt, verify it, and report the result.
 ```
 
-Claude, or the local model itself, can then hand work to it with the `local` agent type. The file's body becomes the agent's instructions, as it would for a Claude agent.
+Name Claude agents' models by full id (`claude-sonnet-5-5`), not alias: under a row that behaves as Sonnet, `sonnet` resolves to that row.
 
-Agents on Claude models keep working under either main model, with one catch: name their model by its full id (`model: claude-sonnet-5-5`), not by an alias (`model: sonnet`). Under a main model whose row behaves as Sonnet, Claude Code resolves the alias `sonnet` to that row's own model, which is yours.
+**Effort:** `/effort`, an agent's `effort` and the Agent tool's `effort` reach your server as `output_config.effort`. A level the server refuses is resent without one and left out for the rest of the session. Compaction requests carry none.
 
-### Effort
+**Auto mode:** Claude Code 2.1.325 returns auto mode's safety verdict inside Claude's own response, so your model's tool calls would all be refused. `CLAUDE_CODE_AUTO_MODE_SERVER=0` (step 2) runs the check as a separate Claude request per checked call, for Claude sessions too. Other permission modes need no setting. If a later Claude Code drops its own check, use another permission mode for your model.
 
-`/effort`, an agent file's `effort` and the Agent tool's `effort` reach your server unchanged as `output_config.effort`. What each level means is up to the model. DeepSeek V4.1, for example, maps low to 50, high and xhigh to 75 and max to 100, on a scale of 1 to 100. If the server refuses a level (DeepSeek V4.1 has no medium), pi-models resends that step without one, so the server's default applies, and leaves that level out for the rest of the session. Compaction requests carry no effort.
+**What still goes to Anthropic:** your model's steps go only to your endpoint, but Claude Code still needs a Claude login or API key and makes its own requests: auto mode's checks, WebSearch, background requests. It doesn't run Claude Code offline.
 
-### Auto mode
+**Limits:**
 
-Since Claude Code 2.1.325, auto mode's safety check comes back inside Claude's own response. A response from your model carries no verdict, so auto mode would refuse every tool call it makes. `CLAUDE_CODE_AUTO_MODE_SERVER=0` makes Claude Code run the check itself: a separate request to a Claude model for each call that needs checking, billed or counted like any Claude request. It applies to Claude sessions too, which then make the same separate requests. Other permission modes need no setting.
+- Outside Code Mode your model gets Claude Code's own tools, not MCP or plugin tools; in Code Mode it reaches them through REPL.
+- Until one Claude request has gone out with pi-models on, a session that starts on your model sees the first 300 characters of each tool's description.
+- Local agents are read from `.claude/agents` and `~/.claude/agents`, not from plugins.
+- Needs `curl` on your PATH, and `sh` for requests over 2,000,000 characters. The key goes to curl on its standard input, never on a command line; for a request over 2,000,000 characters it also passes through that `sh` process's environment, which only your own user can read.
+- No overall time limit on a request; press Esc if your server stalls. Your model writes its own compaction summaries.
 
-If a later Claude Code drops its own check, auto mode refuses your model's tool calls again; use another permission mode for it then.
-
-### What still goes to Anthropic
-
-pi-models sends your model's steps only to your endpoint. Claude Code itself still needs a Claude login or API key, and still makes its own requests to Anthropic: auto mode's checks, WebSearch, and its usual background requests. It is not a way to run Claude Code offline.
-
-### Limits
-
-- Pick an agent's model by its agent type. When your model is the main model, it isn't offered the Agent tool's `model` option: Claude Code resolves `model: "sonnet"` under a row that behaves as Sonnet to that row's own model.
-- Tool descriptions are taken from Claude Code's own rendering of them, which happens on Claude requests. Until Claude Code has sent one Claude request with pi-models enabled, a session that starts on your model sees the first 300 characters of each tool's description. After that, the full text is kept.
-- A local agent's instructions are read from `.claude/agents` in the project and `~/.claude/agents`. Agents that ship inside plugins are not read.
-- Outside Code Mode your model is offered Claude Code's own tools only, not MCP or plugin tools: Claude Code gives mods no schemas for those. In Code Mode it reaches them through REPL, as Claude does.
-- `curl` must be on your PATH. pi-models streams through it and passes the API key on curl's standard input, never on a command line. A request over 2,000,000 characters, such as a long conversation with screenshots, also needs `sh`, so on Windows without `sh` it fails. For such a request the key passes through that `sh` process's environment, which only your own user can read.
-- There is no overall time limit on a request, so a long answer is never cut off. If your server stalls, press Esc.
-- When a conversation on your model fills up, your model writes the compaction summary itself.
-
-To see exactly what is sent, start Claude Code with `PI_MODELS_DUMP` set to a folder. pi-models then writes each request body there, without the key:
-
-```
-PI_MODELS_DUMP=/tmp/pi-models-dump claude
-```
+`PI_MODELS_DUMP=/tmp/pi-models-dump claude` writes each request body to that folder, without the key.
 
 ## Token countdown
 
-Claude Code can give the model a token budget for its work: `<total_tokens>15000000 tokens left</total_tokens>` in the system prompt, then a lower count after each tool result. The 15,000,000 is Claude Code's default budget for a task. It is not the context window, and Claude Code still compacts the conversation as usual. By default Claude Code sends it only to some Claude models, not to Opus 5.5, Sonnet 5.5, Fable 5.2 or models it doesn't know. ZCode sends the same budget to every model. To turn it on for every model, add this key to the `env` block of `~/.claude/settings.json` (to an existing `env` block, if there is one) and start a new session:
-
-```json
-{ "env": { "CLAUDE_CODE_TOTAL_TOKENS_REMINDER": "padded-countdown" } }
-```
-
-pi keeps the countdown in its prompt, and pi-models passes it to your model. The setting is one Claude Code marks as internal, so a later version may change it. Its other mode, `countdown`, counts down the context window instead, but on a `local/` row that is the window of the model in `behavesAs` (1,000,000 for Sonnet 5.5), not your server's, so it would mislead your model.
+Claude Code can tell the model how many tokens of its task budget are left (`<total_tokens>15000000 tokens left</total_tokens>`), counting down after each tool result. The 15,000,000 is a task budget, not the context window. Claude Code sends it only to some Claude models; ZCode sends it to every model. To do the same, add `"CLAUDE_CODE_TOTAL_TOKENS_REMINDER": "padded-countdown"` to the `env` block of your settings. pi keeps it, and pi-models passes it to your model. Claude Code marks the setting internal, so it may change. Its other mode, `countdown`, counts down the context window instead, but on a `local/` row that is the `behavesAs` model's window, not your server's.
 
 ## Code Mode
 
-Both mods work with Claude Code's [Code Mode](https://code.claude.com/docs/en/code-mode), where the model writes JavaScript that calls its tools. In Code Mode the model gets two tools, REPL and Poll.
-
-- **pi** keeps Claude Code's lean prompt, which every Code Mode model has, with pi's rules, including one for REPL: batch independent calls, chain them, and filter large output inside one script. Tools behind ToolSearch show by name only in REPL's declarations, which cuts REPL's description from about 33,500 to 22,600 characters.
-- **pi-models** gives your model the same two tools, so it drives Code Mode as Claude does.
-
-Code Mode is Claude Code's own feature, and neither mod turns it on. To try it, add this to `~/.claude/settings.json` and start a new session:
-
-```json
-{ "env": { "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE": "1" } }
-```
-
-Code Mode has requirements of its own:
-
-- **Feature flags:** it needs Claude Code to fetch feature flags from Anthropic, so it doesn't start while `DISABLE_TELEMETRY`, `DO_NOT_TRACK` or `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set. With flags on, Claude Code also sends its usage analytics.
-- **Models:** it needs Opus 5.5, Sonnet 5.5, Haiku 5.5, Fable 5.2, or a row that behaves as one of them.
-- **Mods:** it refuses to start while an enabled mod uses a hook that sees or changes tool calls or agents: `tool.call`, `tool.check`, `agent.offer`, `agent.spawn` or `session.send`. Neither of these mods does. The warning at startup names the mod that does.
+Both mods work in Claude Code's [Code Mode](https://code.claude.com/docs/en/code-mode), where the model writes JavaScript that calls its tools through REPL. pi adds a rule for REPL (batch, chain and filter inside one script); pi-models gives your model the same tools. Neither turns Code Mode on: set `"CLAUDE_CODE_EXPERIMENTAL_CODE_MODE": "1"` in your `env` block. It needs Claude Code to fetch feature flags, so it won't start while `DISABLE_TELEMETRY`, `DO_NOT_TRACK` or `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set, and it then sends usage analytics. It needs Opus 5.5, Sonnet 5.5, Haiku 5.5, Fable 5.2 or a row that behaves as one of them, and refuses to start while an enabled mod hooks tool calls or agents; these two don't.
 
 ## Turn them off
 
@@ -183,26 +121,9 @@ Code Mode has requirements of its own:
 /plugin disable pi-models@claude-pi
 ```
 
-Before you turn pi-models off, switch to a Claude model and remove your `local/` rows and agent files. Without pi-models, a step on a `local/` model goes to Anthropic with its conversation, and Anthropic rejects the unknown model.
+Before turning pi-models off, switch to a Claude model and remove your `local/` rows and agent files: without it, a `local/` step goes to Anthropic, which rejects the unknown model.
 
-## How they work
-
-pi's `plugins/pi/hooks/register.ts` registers three hooks:
-
-- `prompt.compose` keeps Claude Code's lean prompt, without its `pronouns` and `original_games` sections, and adds pi's rules after `lean_body`, its shared part. On a model that gets the long prompt it replaces it with pi's, keeping the `memory`, `output_style`, `context_management`, `act_dont_rederive` and `total_tokens` sections and the sections other mods add.
-- `tool.describe` gives Read, Bash, Edit and Write pi's descriptions, and puts every tool outside the short list behind ToolSearch.
-- `prompt.context` keeps CLAUDE.md and drops the other context blocks.
-
-pi-models' `plugins/pi-models/hooks/register.ts` registers four:
-
-- `turn.step` answers each step on a `local/` model. It sends your server the conversation, the system prompt Claude Code composes (Claude Code's own as pi edits it, or pi's on a model that gets the long prompt), the agent's instructions and the tools it can use, then streams the answer back into Claude Code.
-- `session.compact` has your model summarize its own conversation.
-- `tool.describe` records each tool's description as Claude Code renders it, unchanged.
-- `attribution.text` names your model in commit trailers when it is the main model.
-
-pi sends nothing anywhere. pi-models sends requests only to the endpoint you configure. Its settings, the API key included, are readable by any other mod you install, as every mod's are.
-
-To check them yourself, run `claude plugin validate` on either plugin's folder in a clone. Claude Code writes the type definitions `tsc` needs (`.claude-plugin/types/`) when an interactive session first loads a plugin from your folder, so open one session first, for example with `claude --plugin-dir plugins/pi-models` (`claude -p` does not write them).
+pi sends nothing anywhere; pi-models sends requests only to your endpoint. Any other mod you install can read pi-models' settings, the key included, as with every mod. The code is two files, `plugins/*/hooks/register.ts`. To check it, run `claude plugin validate` on a plugin folder; `tsc` needs the type definitions an interactive session writes when it first loads the folder (`claude --plugin-dir plugins/pi`).
 
 ## Credits
 

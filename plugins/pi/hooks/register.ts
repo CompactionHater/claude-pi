@@ -2,9 +2,9 @@ import type { Register } from 'claude-code'
 
 // claude-pi: Claude Code with the lean harness of pi (github.com/earendil-works/pi, MIT).
 // Pi's tool descriptions and rules, project instructions as the only context, and a short tool list
-// in front; every other tool stays one ToolSearch away. Claude Code's own lean prompt is kept where
-// the model has one, without its off-topic sections; the long prompt older models get is replaced by
-// Pi's. Works in Code Mode too.
+// in front; every other tool stays one ToolSearch away, and Claude Code's bundled skills are hidden from
+// the model. Claude Code's own lean prompt is kept where the model has one, without its off-topic parts;
+// the long prompt older models get is replaced by Pi's. Works in Code Mode too.
 
 // Pi's tool descriptions, adapted where Claude Code's parameters differ: Edit takes
 // old_string/new_string (Pi: edits[]), Bash's timeout is in milliseconds (Pi: seconds).
@@ -45,8 +45,40 @@ const KEPT_SECTIONS = new Set(['memory', 'output_style', 'context_management', '
 const keptSection = (id: string): boolean => KEPT_SECTIONS.has(id) || (id.includes(':') && !id.startsWith('claude-pi:'))
 // Lean-prompt sections a coding agent doesn't need: the pronoun rule and the rule on recreating games.
 const DROPPED_SECTIONS = new Set(['pronouns', 'original_games'])
+// Lines of the lean prompt's environment section about Claude Code the product (its apps, fast mode).
+const PRODUCT_LINES = /^ - (Claude Code is available as|Fast mode for Claude Code)[^\n]*\n?/gm
+// Auto mode's note to read and edit files through Bash (in either wording), which pi's rules contradict.
+const BASH_FOR_FILES = /^(?:You can do much of your work|Do your work) through the Bash tool[^\n]*\n?/m
+// Claude Code's bundled skills, hidden from the model as pi lists none of its own; each stays typable as
+// /name, and your own skillOverrides entry for one wins. shortcut: Claude Code 2.1.325's bundled list plus
+// the four more it lists, so a skill a later version bundles stays listed until it is added here.
+const BUNDLED_SKILLS = [
+  'artifact-diagramming', 'batch', 'claude-code-docs', 'code-review', 'commit', 'dataviz', 'debug', 'explain-usage',
+  'fewer-permission-prompts', 'keybindings-help', 'loop', 'memory-types', 'plugin-authoring', 'pr', 'simplify',
+  'update-config', 'verify', 'workflow-authoring', 'claude-api', 'run', 'init', 'security-review',
+]
+const HIDDEN_SKILLS = Object.fromEntries(BUNDLED_SKILLS.map(name => [name, 'user-invocable-only']))
 
 export const register: Register = on => {
+  on('settings.read', async (_$, e, next) => {
+    const r = await next(e)
+    // A read of one source (a settings file as loaded) stays as written; only the merge gets the default.
+    if (e.source || r.value === undefined) return r
+    const own = r.value.skillOverrides
+    const skillOverrides = { ...HIDDEN_SKILLS, ...(own && typeof own === 'object' && !Array.isArray(own) ? own : {}) }
+    // Past 256 entries Claude Code drops the whole key, your own entries with it.
+    if (Object.keys(skillOverrides).length > 256) return r
+    return { value: { ...r.value, skillOverrides } }
+  }).catch(async (_$, e, next) => next(e))
+
+  on('prompt.attachment', { type: 'auto_mode' }, async (_$, e, next) => {
+    const r = await next(e)
+    if (e.origin.kind !== 'engine' || r.text === null || !BASH_FOR_FILES.test(r.text)) return r
+    const text = r.text.replace(BASH_FOR_FILES, '').trim()
+    // What is left may be only the note's heading ("While auto mode is active:").
+    return { text: text === '' || /^[^\n]*:$/.test(text) ? null : text }
+  })
+
   on('tool.describe', async (_$, e, next) => {
     const r = await next(e)
     const description = DESCRIPTIONS[e.tool] ?? r.description
@@ -73,7 +105,9 @@ export const register: Register = on => {
     // FrontierHarness v1.1) sends every model almost the same text. It is kept, without its off-topic
     // sections, and Pi's rules follow its shared part. Only the long prompt (about 27,500) is replaced.
     if (e.traits.includes('lean')) {
-      const kept = sections.filter(s => !DROPPED_SECTIONS.has(s.id))
+      const kept = sections
+        .filter(s => !DROPPED_SECTIONS.has(s.id))
+        .map(s => (s.id.startsWith('env_info') ? { ...s, text: s.text.replace(PRODUCT_LINES, '') } : s))
       const at = kept.findIndex(s => s.scope !== 'shared')
       kept.splice(at === -1 ? kept.length : at, 0, rulesSection)
       return { sections: kept }
