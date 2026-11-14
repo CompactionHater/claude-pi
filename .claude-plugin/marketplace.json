@@ -1,0 +1,14 @@
+{
+  "name": "claude-pi",
+  "owner": {
+    "name": "CompactionHater"
+  },
+  "description": "claude-pi: Claude Code with pi's lean harness, as a mod.",
+  "plugins": [
+    {
+      "name": "pi",
+      "source": "./",
+      "description": "Claude Code with pi's lean harness: pi's system prompt and tool descriptions, project instructions as the only context, and a short tool list. Works in Code Mode."
+    }
+  ]
+}
