@@ -8,17 +8,17 @@ The first request of a session, in characters (about four to a token), measured 
 
 | | Claude Code | With pi | Saved |
 |---|---|---|---|
-| Opus 5.5 | 52,200 | 16,600 | 68% |
-| Sonnet 4.6 | 89,700 | 26,900 | 70% |
+| Sonnet 5.5 | 51,800 | 16,600 | 68% |
+| Sonnet 4.6, an older model | 89,700 | 26,900 | 70% |
 
-Where it comes from, on Opus 5.5:
+Where it comes from, on Sonnet 5.5:
 
 | Part | Claude Code | With pi |
 |---|---|---|
-| Tool schemas | 34,700 | 6,500: Read, Bash, Edit, Write and ToolSearch |
-| Bash's description alone | 1,900 | 160, pi's |
-| First message | 11,300, mostly the skill and agent listings | 4,600: bundled skills hidden from the model |
-| System prompt | 6,200 | 5,500 |
+| Tool schemas | 35,000, 12 tools | 6,500: Read, Bash, Edit, Write and ToolSearch |
+| Bash's description alone | 1,860 | 160, pi's |
+| First message | 10,900, mostly the skill and agent listings | 4,600: bundled skills hidden from the model |
+| System prompt | 6,000 | 5,500 |
 
 A project's CLAUDE.md and your own skills add the same to both. MCP servers add less with pi, which puts their tools behind ToolSearch.
 
@@ -44,7 +44,7 @@ Install one or both, then run `/reload-plugins` or start a new session. Needs Cl
 
 Permissions, hooks, slash commands, subagents and other mods' prompt sections are unchanged. The lean prompt is kept because it is short and about coding: ZCode, the top harness on [FrontierHarness](https://frontierharness.org) v1.1, sends almost the same text. Claude Code still adds a few lines mods can't reach, such as the commit attribution reminder.
 
-To save more, `"autoMemoryEnabled": false` in your settings turns off auto memory and its instructions: 2,300 characters on Opus 5.5, 12,800 on Sonnet 4.6.
+To save more, `"autoMemoryEnabled": false` in your settings turns off auto memory and its instructions: 2,100 characters on Sonnet 5.5, 12,800 on Sonnet 4.6.
 
 ## pi-models
 
@@ -64,7 +64,7 @@ Run the same command to change them later.
 {
   "modelPicker": {
     "options": [
-      { "model": "local/Qwen/Qwen3-Coder-30B-A3B-Instruct", "label": "Qwen3 Coder (local)", "behavesAs": "claude-sonnet-5-5" }
+      { "model": "local/deepseek-ai/DeepSeek-V4.1-Flash", "label": "DeepSeek V4.1 Flash (local)", "behavesAs": "claude-sonnet-5-5" }
     ]
   },
   "env": { "CLAUDE_CODE_AUTO_MODE_SERVER": "0" }
@@ -81,7 +81,7 @@ Run the same command to change them later.
 ---
 name: local
 description: The local model. Good for well-specified coding, scouting and mechanical work.
-model: local/Qwen/Qwen3-Coder-30B-A3B-Instruct
+model: local/deepseek-ai/DeepSeek-V4.1-Flash
 effort: high
 ---
 
