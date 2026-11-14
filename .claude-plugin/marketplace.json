@@ -8,7 +8,7 @@
     {
       "name": "pi",
       "source": "./plugins/pi",
-      "description": "Claude Code with pi's lean harness: pi's system prompt and tool descriptions, project instructions as the only context, and a short tool list. Works in Code Mode."
+      "description": "Claude Code with pi's lean harness: a short tool list with pi's tool descriptions, CLAUDE.md as the only context added to your first message, and pi's system prompt in place of Claude Code's long one. Works in Code Mode."
     },
     {
       "name": "pi-models",

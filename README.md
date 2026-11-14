@@ -2,7 +2,7 @@
 
 Two mods for Claude Code, installed with slash commands:
 
-- **pi** gives Claude Code the lean harness of [pi](https://github.com/earendil-works/pi): a short tool list with pi's tool descriptions, project instructions as the only context, and pi's system prompt where Claude Code would send its long one.
+- **pi** gives Claude Code the lean harness of [pi](https://github.com/earendil-works/pi): a short tool list with pi's tool descriptions, CLAUDE.md as the only context added to your first message, and pi's system prompt where Claude Code would send its long one.
 - **pi-models** lets you use any model served by an Anthropic-compatible endpoint (vLLM, llama.cpp, Ollama, LM Studio, a gateway) beside Claude, as the main model or as an agent.
 
 Each works on its own, and they work together. Neither needs a launcher script or a patched binary: both use Claude Code's mods API.
@@ -23,16 +23,16 @@ Install one or both. Then run `/reload-plugins`, or start a new session. Needs C
 
 | | Claude Code | With pi |
 |---|---|---|
-| System prompt on Opus 4.8 and later, Sonnet and Haiku 5.5, Fable | Claude Code's lean prompt, about 6,200 characters | The same, unchanged |
+| System prompt on Opus 4.8 and later, Sonnet and Haiku 5.5, Fable, and models Claude Code doesn't know | Claude Code's lean prompt, about 6,200 characters | The same, unchanged |
 | System prompt on older models | Claude Code's long prompt, about 27,500 characters | pi's prompt: one role line, a tool list, a few rules, the working directory, plus Claude Code's sections listed below |
-| Tools sent with every request | 12 tools, about 34,700 characters of schemas on Opus 5.5 | Read, Bash, Edit, Write and ToolSearch, about 6,500 characters |
+| Tools sent with every request, on Opus 5.5 | 12 tools, about 34,700 characters of schemas | Read, Bash, Edit, Write and ToolSearch, about 6,500 characters |
 | Other tools | Some behind ToolSearch | All behind ToolSearch: the model loads one when it needs it |
 | Context in the first message | CLAUDE.md, your email, today's date | CLAUDE.md only |
 | Tool descriptions | Claude Code's | pi's, adapted to Claude Code's parameters |
 
-Measured on Claude Code 2.1.325 in an interactive session in an empty folder: the first request's prompt, tools and context go from about 52,200 characters to 24,100 on Opus 5.5, and from about 89,700 to 33,200 on Sonnet 4.6. A project's CLAUDE.md, skills and MCP servers add the same to both.
+Measured on Claude Code 2.1.325 in an interactive session in an empty folder: the first request's prompt, tools and context go from about 52,200 characters to 24,100 on Opus 5.5, and from about 89,700 to 33,200 on Sonnet 4.6. On Sonnet 4.6 most of the saving is tools: pi's prompt keeps auto memory's instructions, which are about 12,800 characters there. A project's CLAUDE.md and skills add the same to both; MCP servers add less with pi, which puts their tools behind ToolSearch.
 
-Claude Code's lean prompt is kept because it is already short, and because ZCode, the top harness across five open models on [FrontierHarness](https://frontierharness.org) v1.1, sends every model nearly the same prompt, word for word. Where pi's prompt replaces the long one, it keeps these sections of Claude Code's: auto memory's instructions, a chosen output style, the note that a long conversation is summarized rather than ended, "when you have enough information to act, act", and the token countdown below.
+Claude Code's lean prompt is kept because it is already short, and because ZCode, the top harness across five open models on [FrontierHarness](https://frontierharness.org) v1.1, sends every model almost the same text. Where pi's prompt replaces the long one, it keeps these sections of Claude Code's: auto memory's instructions, a chosen output style, the note that a long conversation is summarized rather than ended, "when you have enough information to act, act", and the token countdown below.
 
 Kept as they are:
 
@@ -149,13 +149,13 @@ PI_MODELS_DUMP=/tmp/pi-models-dump claude
 
 ## Token countdown
 
-Claude Code can tell the model how many tokens it has left: `<total_tokens>15000000 tokens left</total_tokens>` in the system prompt, then a lower count after each tool result. By default it does this only for some Claude models, not for Opus 5.5, Sonnet 5.5, Fable 5.2 or models it doesn't know. ZCode sends it to every model. To turn it on for every model, add this to the `env` block of `~/.claude/settings.json` and start a new session:
+Claude Code can give the model a token budget for its work: `<total_tokens>15000000 tokens left</total_tokens>` in the system prompt, then a lower count after each tool result. The 15,000,000 is Claude Code's default budget for a task. It is not the context window, and Claude Code still compacts the conversation as usual. By default Claude Code sends it only to some Claude models, not to Opus 5.5, Sonnet 5.5, Fable 5.2 or models it doesn't know. ZCode sends the same budget to every model. To turn it on for every model, add this key to the `env` block of `~/.claude/settings.json` (to an existing `env` block, if there is one) and start a new session:
 
 ```json
 { "env": { "CLAUDE_CODE_TOTAL_TOKENS_REMINDER": "padded-countdown" } }
 ```
 
-pi keeps the countdown in its prompt, and pi-models passes it to your model. The setting is one Claude Code marks as internal, so a later version may change it.
+pi keeps the countdown in its prompt, and pi-models passes it to your model. The setting is one Claude Code marks as internal, so a later version may change it. Its other mode, `countdown`, counts down the context window instead, but on a `local/` row that is the window of the model in `behavesAs` (1,000,000 for Sonnet 5.5), not your server's, so it would mislead your model.
 
 ## Code Mode
 
@@ -195,7 +195,7 @@ pi's `plugins/pi/hooks/register.ts` registers three hooks:
 
 pi-models' `plugins/pi-models/hooks/register.ts` registers four:
 
-- `turn.step` answers each step on a `local/` model. It sends your server the conversation, the system prompt Claude Code composes (pi's, when pi is installed), the agent's instructions and the tools it can use, then streams the answer back into Claude Code.
+- `turn.step` answers each step on a `local/` model. It sends your server the conversation, the system prompt Claude Code composes (Claude Code's own, or pi's on a model that gets the long prompt), the agent's instructions and the tools it can use, then streams the answer back into Claude Code.
 - `session.compact` has your model summarize its own conversation.
 - `tool.describe` records each tool's description as Claude Code renders it, unchanged.
 - `attribution.text` names your model in commit trailers when it is the main model.

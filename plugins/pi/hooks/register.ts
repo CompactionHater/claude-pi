@@ -21,23 +21,18 @@ const SNIPPETS: Record<string, string> = {
   Edit: 'Make precise file edits with exact text replacement',
   Write: 'Create or overwrite files',
   ToolSearch: 'Load a tool that is not listed here, by name or keyword',
-  REPL: 'Run JavaScript that calls other tools',
-  Poll: 'Wait for script output and other events',
 }
 
-// Pi's guidelines per tool; REPL's is the one Pi gives its codemode tool.
+// Pi's guidelines per tool.
 const GUIDELINES: Record<string, string> = {
   Read: 'Use Read to examine files instead of cat or sed.',
   Edit: 'Use Edit for targeted changes (old_string must match exactly and uniquely).',
   Write: 'Use Write only for new files or complete rewrites.',
-  REPL: 'Use REPL to batch independent tool calls (Promise.all), chain them, or filter large output, instead of many separate calls.',
 }
 
 // Tools whose schemas stay in the prompt: Pi's four, ToolSearch to reach the rest, Code Mode's two,
 // ExitPlanMode so plan mode can end, and SubagentHandback so a subagent can report without loading it.
 const IN_FRONT = new Set(['Read', 'Bash', 'Edit', 'Write', 'ToolSearch', 'REPL', 'Poll', 'ExitPlanMode', 'SubagentHandback'])
-// In Code Mode the model is given only these two; everything else runs inside its scripts.
-const CODE_MODE_TOOLS = ['REPL', 'Poll']
 // Engine sections kept under Pi's prompt: auto memory's instructions, a chosen output style, the
 // note that a long conversation is summarized rather than ended, the "act, don't re-derive" line and
 // the token countdown (CLAUDE_CODE_TOTAL_TOKENS_REMINDER).
@@ -53,7 +48,7 @@ export const register: Register = on => {
     return IN_FRONT.has(e.tool) ? { ...r, description } : { ...r, description, isDeferred: true }
   })
 
-  // Pi carries no date, email or account context: project instructions (CLAUDE.md) only.
+  // The first message carries project instructions (CLAUDE.md) only: no date, email or account context.
   on('prompt.context', async (_$, e, next) => {
     const { blocks } = await next(e)
     return { blocks: blocks.filter(b => b.name === 'claudeMd') }
@@ -61,11 +56,12 @@ export const register: Register = on => {
 
   on('prompt.compose', async ($, e, next) => {
     const { sections } = await next(e)
-    // Claude Code's lean prompt (the `lean` trait: Opus 4.8 and later, Sonnet and Haiku 5.5, Fable) is
-    // about 6,000 characters and is what ZCode, the top harness on FrontierHarness v1.1, sends every
-    // model: it stays as it is. Only the long prompt (about 27,000) is replaced.
+    // Claude Code's lean prompt (the `lean` trait: Opus 4.8 and later, Sonnet and Haiku 5.5, Fable,
+    // unknown models) is about 6,200 characters, and ZCode (top on FrontierHarness v1.1) sends every
+    // model almost the same text: it stays as it is. Only the long prompt (about 27,500) is replaced.
+    // Code Mode runs only on lean models, so the long path never sees REPL.
     if (e.traits.includes('bare') || e.traits.includes('lean')) return { sections }
-    const shown = e.tools.includes('REPL') ? CODE_MODE_TOOLS : e.tools.filter(t => IN_FRONT.has(t) && t in SNIPPETS)
+    const shown = e.tools.filter(t => IN_FRONT.has(t) && t in SNIPPETS)
     const rules = [
       ...(shown.includes('Bash') ? ['Use Bash for file operations like ls, rg, find'] : []),
       ...shown.flatMap(t => (GUIDELINES[t] ? [GUIDELINES[t]] : [])),
@@ -82,8 +78,10 @@ export const register: Register = on => {
         },
         { id: 'claude-pi:tools', scope: 'session' as const, text: `<tools>\n${tools}\n\nAdditional tools may be available.\n</tools>` },
         { id: 'claude-pi:rules', scope: 'session' as const, text: `<rules>\n${rules.map(r => `- ${r}`).join('\n')}\n</rules>` },
-        ...sections.filter(s => keptSection(s.id)).map(s => ({ ...s, scope: 'session' as const })),
         { id: 'claude-pi:cwd', scope: 'session' as const, text: `<cwd>\n${await $.session.cwd()}\n</cwd>` },
+        // Shared sections must all come first, so a kept one placed after pi's session sections becomes
+        // session-scoped. The countdown stays last, as Claude Code places it.
+        ...sections.filter(s => keptSection(s.id)).map(s => ({ ...s, scope: 'session' as const })),
       ],
     }
   })
