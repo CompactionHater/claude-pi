@@ -44,7 +44,7 @@ Code Mode is Claude Code's own feature, and claude-pi doesn't turn it on. To try
 { "env": { "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE": "1" } }
 ```
 
-Code Mode has requirements of its own. It needs Claude Code to fetch feature flags from Anthropic, so it doesn't start while `DISABLE_TELEMETRY`, `DO_NOT_TRACK` or `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set. With flags on, Claude Code also sends its usage analytics. It needs Opus 5.5, Sonnet 5.5, Haiku 5.5 or Fable 5.2, and it refuses to start if any installed mod hooks tool calls. claude-pi hooks none, so it never blocks Code Mode.
+Code Mode has requirements of its own. It needs Claude Code to fetch feature flags from Anthropic, so it doesn't start while `DISABLE_TELEMETRY`, `DO_NOT_TRACK` or `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set. With flags on, Claude Code also sends its usage analytics. It needs Opus 5.5, Sonnet 5.5, Haiku 5.5 or Fable 5.2, and it refuses to start while any enabled mod hooks tool calls. claude-pi hooks none, so it never blocks Code Mode; another mod can, and the warning at startup says so.
 
 ## Turn it off
 
