@@ -2,7 +2,7 @@
 
 Two mods for Claude Code, installed with slash commands:
 
-- **pi** gives Claude Code the lean harness of [pi](https://github.com/earendil-works/pi): a short tool list with pi's tool descriptions, CLAUDE.md as the only context added to your first message, and pi's system prompt where Claude Code would send its long one.
+- **pi** gives Claude Code the lean harness of [pi](https://github.com/earendil-works/pi): a short tool list with pi's tool descriptions and rules, CLAUDE.md as the only context added to your first message, and pi's system prompt where Claude Code would send its long one.
 - **pi-models** lets you use any model served by an Anthropic-compatible endpoint (vLLM, llama.cpp, Ollama, LM Studio, a gateway) beside Claude, as the main model or as an agent.
 
 Each works on its own, and they work together. Neither needs a launcher script or a patched binary: both use Claude Code's mods API.
@@ -23,16 +23,16 @@ Install one or both. Then run `/reload-plugins`, or start a new session. Needs C
 
 | | Claude Code | With pi |
 |---|---|---|
-| System prompt on Opus 4.8 and later, Sonnet and Haiku 5.5, Fable, and models Claude Code doesn't know | Claude Code's lean prompt, about 6,200 characters | The same, unchanged |
+| System prompt on Opus 4.8 and later, Sonnet and Haiku 5.5, Fable, and models Claude Code doesn't know | Claude Code's lean prompt, about 6,200 characters | The same without its two off-topic sections (pronouns, recreating existing games), plus pi's rules: about 5,900 |
 | System prompt on older models | Claude Code's long prompt, about 27,500 characters | pi's prompt: one role line, a tool list, a few rules, the working directory, plus Claude Code's sections listed below |
 | Tools sent with every request, on Opus 5.5 | 12 tools, about 34,700 characters of schemas | Read, Bash, Edit, Write and ToolSearch, about 6,500 characters |
 | Other tools | Some behind ToolSearch | All behind ToolSearch: the model loads one when it needs it |
 | Context in the first message | CLAUDE.md, your email, today's date | CLAUDE.md only |
 | Tool descriptions | Claude Code's | pi's, adapted to Claude Code's parameters |
 
-Measured on Claude Code 2.1.325 in an interactive session in an empty folder: the first request's prompt, tools and context go from about 52,200 characters to 24,100 on Opus 5.5, and from about 89,700 to 33,200 on Sonnet 4.6. On Sonnet 4.6 most of the saving is tools: pi's prompt keeps auto memory's instructions, which are about 12,800 characters there. A project's CLAUDE.md and skills add the same to both; MCP servers add less with pi, which puts their tools behind ToolSearch.
+Measured on Claude Code 2.1.325 in an interactive session in an empty folder: the first request's prompt, tools and context go from about 52,200 characters to 23,800 on Opus 5.5, and from about 89,700 to 33,200 on Sonnet 4.6. On Sonnet 4.6 most of the saving is tools: pi's prompt keeps auto memory's instructions, which are about 12,800 characters there. A project's CLAUDE.md and skills add the same to both; MCP servers add less with pi, which puts their tools behind ToolSearch.
 
-Claude Code's lean prompt is kept because it is already short, and because ZCode, the top harness across five open models on [FrontierHarness](https://frontierharness.org) v1.1, sends every model almost the same text. Where pi's prompt replaces the long one, it keeps these sections of Claude Code's: auto memory's instructions, a chosen output style, the note that a long conversation is summarized rather than ended, "when you have enough information to act, act", and the token countdown below.
+Claude Code's lean prompt is kept because it is already short and almost all of it is about coding, and because ZCode, the top harness across five open models on [FrontierHarness](https://frontierharness.org) v1.1, sends every model almost the same text. pi removes its two sections that aren't about coding and adds its own rules: use Bash for `ls`, `rg` and `find`, Read instead of `cat`, Edit for targeted changes, Write only for new files or rewrites, be concise, and show file paths. Where pi's prompt replaces the long one, it keeps these sections of Claude Code's: auto memory's instructions, a chosen output style, the note that a long conversation is summarized rather than ended, "when you have enough information to act, act", and the token countdown below.
 
 Kept as they are:
 
@@ -161,7 +161,7 @@ pi keeps the countdown in its prompt, and pi-models passes it to your model. The
 
 Both mods work with Claude Code's [Code Mode](https://code.claude.com/docs/en/code-mode), where the model writes JavaScript that calls its tools. In Code Mode the model gets two tools, REPL and Poll.
 
-- **pi** keeps Claude Code's lean prompt, as every Code Mode model has it. Tools behind ToolSearch show by name only in REPL's declarations, which cuts REPL's description from about 33,500 to 22,600 characters.
+- **pi** keeps Claude Code's lean prompt, which every Code Mode model has, with pi's rules, including one for REPL: batch independent calls, chain them, and filter large output inside one script. Tools behind ToolSearch show by name only in REPL's declarations, which cuts REPL's description from about 33,500 to 22,600 characters.
 - **pi-models** gives your model the same two tools, so it drives Code Mode as Claude does.
 
 Code Mode is Claude Code's own feature, and neither mod turns it on. To try it, add this to `~/.claude/settings.json` and start a new session:
@@ -189,7 +189,7 @@ Before you turn pi-models off, switch to a Claude model and remove your `local/`
 
 pi's `plugins/pi/hooks/register.ts` registers three hooks:
 
-- `prompt.compose` leaves Claude Code's lean prompt as it is. On a model that gets the long prompt it replaces it with pi's, keeping the `memory`, `output_style`, `context_management`, `act_dont_rederive` and `total_tokens` sections and the sections other mods add.
+- `prompt.compose` keeps Claude Code's lean prompt, without its `pronouns` and `original_games` sections, and adds pi's rules after its first part. On a model that gets the long prompt it replaces it with pi's, keeping the `memory`, `output_style`, `context_management`, `act_dont_rederive` and `total_tokens` sections and the sections other mods add.
 - `tool.describe` gives Read, Bash, Edit and Write pi's descriptions, and puts every tool outside the short list behind ToolSearch.
 - `prompt.context` keeps CLAUDE.md and drops the other context blocks.
 
