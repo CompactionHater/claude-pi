@@ -27,6 +27,16 @@ const SUMMARY_MAX_TOKENS = 16384
 const INLINE_BODY_LIMIT = 2_000_000
 // Thinking kept per tool call or answer; the oldest goes first.
 const REASONING_LIMIT = 2000
+// Every local model is sent one system prompt, the one Claude Code composes for Sonnet 5.5 (its lean
+// prompt, with pi's edits when pi is on), whatever Claude model its row behaves as: composed for the row
+// itself, a row behaving as an older model gets the long prompt, with 12,800 characters of memory
+// instructions. asModel then names the model that really answers.
+const PROMPT_MODEL = 'claude-sonnet-5-5'
+// Sections Claude Code adds for the row's own Claude model or effort, such as Opus 5's
+// delivering_work_max, overcorrection and opus5_reduced_delegation: left out, so every row is sent what a
+// Sonnet 5.5 row is. shortcut: ids as of Claude Code 2.1.325; one a later version ties to a model shows
+// on that model's rows until it is added here.
+const ROW_SECTIONS = new Set(['delivering_work_max', 'overcorrection', 'opus5_reduced_delegation', 'original_games', 'heron_brook', 'brook_heron', 'finishing_work'])
 const DEFAULT_SYSTEM =
   'You are a coding assistant inside Claude Code. Use the tools to inspect files, run commands and change code.'
 const poweredBy = (served: string): string =>
@@ -1046,8 +1056,8 @@ async function agentDefinition($: EngineInterface, agentId: string): Promise<Age
 async function stepSystem($: EngineInterface, model: string, served: string, tools: FunctionTool[], agentId?: string): Promise<string> {
   let base: string
   try {
-    const { sections } = await $.prompt.compose({ model, tools: tools.map(t => t.function.name) })
-    base = asModel(sections.map(s => s.text).join('\n\n'), served)
+    const { sections } = await $.prompt.compose({ model: PROMPT_MODEL, tools: tools.map(t => t.function.name) })
+    base = asModel(sections.filter(s => !ROW_SECTIONS.has(s.id)).map(s => s.text).join('\n\n'), served)
   } catch {
     base = DEFAULT_SYSTEM
   }

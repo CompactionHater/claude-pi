@@ -104,7 +104,9 @@ export const register: Register = on => {
     // unknown models; Code Mode always has it) is about 6,200 characters, and ZCode (top on
     // FrontierHarness v1.1) sends every model almost the same text. It is kept, without its off-topic
     // sections, and Pi's rules follow its shared part. Only the long prompt (about 27,500) is replaced.
-    if (e.traits.includes('lean')) {
+    // Told apart by its sections, not `e.traits`: a `$.prompt.compose` for another model (pi-models)
+    // carries the session model's traits.
+    if (!sections.some(s => s.id === 'doing_tasks')) {
       const kept = sections
         .filter(s => !DROPPED_SECTIONS.has(s.id))
         .map(s => (s.id.startsWith('env_info') ? { ...s, text: s.text.replace(PRODUCT_LINES, '') } : s))
