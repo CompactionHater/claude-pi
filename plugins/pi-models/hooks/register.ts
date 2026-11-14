@@ -1,4 +1,4 @@
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, ToolInfo } from 'claude-code'
 
 // ---- Any Anthropic-compatible Messages endpoint as a Claude Code model ---------------------------
 //
@@ -20,11 +20,13 @@ const isLocal = (id: string): boolean => id.startsWith(PREFIX)
 // The settings the plugin was configured with (plugin.json's userConfig).
 type Endpoint = { url: string; apiKey: string; maxTokens: number }
 
-// One step's stream, time queued on the server included. A spawned curl has no ten-minute ceiling
-// (`$.process.run` has), and the engine kills it when the step is interrupted.
-const MAX_SECONDS = 1800
 // Room for the thinking before a summary.
 const SUMMARY_MAX_TOKENS = 16384
+// curl holds 10 MiB in one config line; a body past this goes to curl through a pipe instead (see
+// localStream), so nothing touches disk.
+const INLINE_BODY_LIMIT = 2_000_000
+// Thinking kept per tool call or answer; the oldest goes first.
+const REASONING_LIMIT = 2000
 const DEFAULT_SYSTEM =
   'You are a coding assistant inside Claude Code. Use the tools to inspect files, run commands and change code.'
 const poweredBy = (served: string): string =>
@@ -257,6 +259,9 @@ const ENGINE_ONLY_SCHEMAS: [string, Schema][] = [
 // (`tool.describe`) and kept in the store for a session whose Claude steps have not rendered it yet.
 const fullDescriptions = new Map<string, string>()
 let storedDescriptions: Record<string, string> | undefined
+// The names the local model was last offered: an MCP tool outside this set has no use for its
+// description here.
+let offeredTools = new Set<string>()
 // A routed orchestrator picks an agent's model by type only: the engine resolves a `model` alias of the
 // parent's own family to the parent's model, so an alias under the local model's picker row would run
 // on the local model. The Agent schema and REPL's declaration lose it.
@@ -503,13 +508,18 @@ function parseToolInputs(dts: string): Record<string, Schema> {
 }
 
 let parsedTools: Record<string, Schema> | null | undefined
+let parsedAt = 0
+// A failed read is retried later: the type file is written as the plugin loads, so a read can lose
+// the race with it, and it may appear on a later call.
+const TYPE_RETRY_MS = 60_000
 
 async function liveToolSchemas($: EngineInterface): Promise<Record<string, Schema> | null> {
-  if (parsedTools === undefined) {
+  if (parsedTools === undefined || (parsedTools === null && Date.now() - parsedAt >= TYPE_RETRY_MS)) {
     try {
       parsedTools = parseToolInputs(await $.fs.read(`${$.plugin.root}/.claude-plugin/types/claude-code-tools/index.d.ts`))
     } catch {
       parsedTools = null
+      parsedAt = Date.now()
     }
   }
   return parsedTools
@@ -538,13 +548,18 @@ async function localTools($: EngineInterface, isMain: boolean): Promise<Function
     const codeMode = listed.some(t => t.name === 'REPL')
     // The engine adds SubagentHandback to an agent's own tools, not to the session's list; an agent it
     // is not active for is told so by the engine and reports as plain text.
-    const handback = isMain || codeMode ? [] : [{ name: 'SubagentHandback', description: 'Deliver your full report to your caller. The call ends your run, so make it your last.', mcp: false }]
+    const handback: ToolInfo[] = isMain || codeMode
+      ? []
+      : [{ name: 'SubagentHandback', description: 'Deliver your full report to your caller. The call ends your run, so make it your last.', mcp: false }]
     const fns = [...listed, ...handback]
-      .filter(t =>
-        codeMode
-          ? CODE_MODE_TOOLS.has(t.name)
-          : !t.mcp && !NOT_FOR_LOCAL.has(t.name) && (isMain || !NOT_FOR_AGENTS.has(t.name)),
-      )
+      .filter(t => {
+        if (codeMode) return CODE_MODE_TOOLS.has(t.name)
+        if (NOT_FOR_LOCAL.has(t.name)) return false
+        // An MCP server's tool is not offered: `ToolInfo.inputSchema` is never on a tool the session
+        // lists, so there is no schema to send. Other tools need one from the type file or the table.
+        if (t.mcp) return false
+        return isMain || !NOT_FOR_AGENTS.has(t.name)
+      })
       .flatMap(t => {
         const base = parsed?.[t.name] ?? hand.get(t.name)
         if (!base) return []
@@ -556,7 +571,10 @@ async function localTools($: EngineInterface, isMain: boolean): Promise<Function
         requiredOf.set(t.name, new Set(((parameters as Schema)['required'] as string[] | undefined) ?? []))
         return [{ type: 'function' as const, function: { name: t.name, description: descriptionOf(t.name, t.description), parameters } }]
       })
-    if (fns.length > 0) return fns
+    if (fns.length > 0) {
+      offeredTools = new Set(fns.map(f => f.function.name))
+      return fns
+    }
   } catch {
     // fall through to the schemas above
   }
@@ -567,10 +585,12 @@ async function localTools($: EngineInterface, isMain: boolean): Promise<Function
   } catch {
     // no tool list either: the descriptions the engine rendered before, or none
   }
-  return asFunctions(
+  const fns = asFunctions(
     isMain ? LOCAL_TOOL_SCHEMAS : LOCAL_TOOL_SCHEMAS.filter(t => !NOT_FOR_AGENTS.has(t.name)),
     name => short.get(name) ?? '',
   )
+  offeredTools = new Set(fns.map(f => f.function.name))
+  return fns
 }
 
 type Block = { type: string; [key: string]: unknown }
@@ -589,11 +609,13 @@ const parseArgs = (json: string): unknown => {
 
 // The engine believes the main model is the Claude model its picker row behaves as and says so in its
 // reminders. The model that really answers is told what it is instead, so it does not claim to be Claude.
+// Each sentence ends at a period followed by whitespace, so a name with a dot in it ("Opus 4.5") stays
+// whole and the match never runs into the text after it.
+const IDENTITY_SENTENCE =
+  /You are (?:currently )?powered by the model(?: named)? [^\n]*?\.(?=\s|$)(?: The exact model ID is [^\n]*?\.(?=\s|$))?(?: (?:Assistant knowledge cutoff|Your innate base knowledge cutoff) is [A-Za-z]+ \d{4}\.)?/g
+
 const asModel = (text: string, name: string): string =>
-  text.replace(
-    /You are powered by the model named .*?Assistant knowledge cutoff is [A-Za-z]+ \d{4}\./s,
-    `You are powered by the model named ${name}.`,
-  )
+  text.replace(IDENTITY_SENTENCE, () => `You are powered by the model named ${name}.`)
 
 /** A data: or http(s) URL for an Anthropic-form image block, or null when it has no usable source. */
 const imageUrlOf = (b: unknown): string | null => {
@@ -625,19 +647,6 @@ function cleanArgs(name: string, json: string): string {
   } catch {
     return json
   }
-}
-
-// A subagent's Claude reminders are dropped for a routed model, but a reminder that carries a message
-// for the agent (SendMessage from the main loop or a peer, a monitor event, a task notification, a
-// mid-run user message) must reach it.
-const CARRIES_MESSAGE = /<agent-message|<task-notification|sent a (new )?message|Monitor m\d+ \(/
-
-/** True when an agent's task must be put before its messages: the first one does not already hold it. */
-function needsTask(task: string | undefined, messages: Message[]): task is string {
-  if (!task) return false
-  const first = messages[0]
-  if (first?.role !== 'user') return true
-  return !blocksOf(first.content).some(b => b.type === 'text' && String(b.text ?? '').includes(task))
 }
 
 // The server needs the model's earlier reasoning replayed, and its chat template keeps every turn's,
@@ -675,12 +684,11 @@ function resultContent(content: unknown): string | Block[] {
   return blocks
 }
 
-// Claude Code's API-form messages as the Messages endpoint takes them. `task` is an agent's spawn
-// prompt (undefined on main); it goes first unless the engine's view already holds it. The server
-// validates block types strictly (text, image, tool_use, tool_result, thinking, redacted_thinking and
-// tool_reference; anything else is a 400), so every block is rebuilt from the fields it needs.
-function toVllm(task: string | undefined, messages: Message[], reasoning: Map<string, string>, served: string): Message[] {
-  const out: Message[] = needsTask(task, messages) ? [{ role: 'user', content: [{ type: 'text', text: task }] }] : []
+// Claude Code's API-form messages as the Messages endpoint takes them. The server validates block
+// types strictly (text, image, tool_use, tool_result, thinking, redacted_thinking and tool_reference;
+// anything else is a 400), so every block is rebuilt from the fields it needs.
+function toVllm(messages: Message[], reasoning: Map<string, string>, served: string): Message[] {
+  const out: Message[] = []
   for (const m of messages) {
     const blocks = blocksOf(m.content)
     const content: Block[] = []
@@ -706,10 +714,7 @@ function toVllm(task: string | undefined, messages: Message[], reasoning: Map<st
           ...(b.is_error === true ? { is_error: true } : {}),
         })
       } else if (b.type === 'text') {
-        // A subagent's reminders (environment, date, attribution, "powered by …") are Claude's, not the
-        // local model's; the main conversation keeps its own, which carry the project instructions.
         const text = String(b.text ?? '')
-        if (task !== undefined && text.startsWith('<system-reminder>') && !CARRIES_MESSAGE.test(text)) continue
         if (text !== '') content.push({ type: 'text', text: asModel(text, served) })
       } else if (b.type === 'image') {
         if (imageUrlOf(b)) content.push({ type: 'image', source: b.source })
@@ -722,20 +727,43 @@ function toVllm(task: string | undefined, messages: Message[], reasoning: Map<st
   return out
 }
 
+// A config value cannot carry a control character: curl would read it as a line break.
+const CONTROL = /[\u0000-\u001f\u007f]/
+
+/** True for a host a proxy must not be used for: the machine's own network (loopback, private and
+ *  link-local addresses), a `.local` name, or a single-label name. */
+function noProxyHost(host: string): boolean {
+  const h = host.replace(/^\[|\]$/g, '').toLowerCase()
+  if (h === '::1') return true
+  if (h.includes(':')) {
+    const first = Number.parseInt(h.split(':')[0] ?? '', 16)
+    // IPv6: fc00::/7 (unique local) and fe80::/10 (link-local).
+    return Number.isFinite(first) && ((first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfe80)
+  }
+  if (!h.includes('.') || h.endsWith('.local')) return true
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h)
+  if (!v4) return false
+  const a = Number(v4[1])
+  const b = Number(v4[2])
+  return a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254)
+}
+
 // The server is reached with curl: plugin http can be refused when nonessential traffic is disabled,
 // and curl sends a key safely. The key travels in a config read from stdin, never argv (so not in
-// `ps`); a loopback target is dialed with no proxy, so a proxy variable in the environment never sees
-// the key. Any http: or https: URL is accepted.
-function curlConfig(endpoint: Endpoint, body: string, maxSeconds: number): string {
+// `ps`); a target on the machine's own network is dialed with no proxy, so a proxy variable in the
+// environment never sees the key. Any http: or https: URL is accepted.
+function curlConfig(endpoint: Endpoint, body?: string): string {
+  if (CONTROL.test(endpoint.url)) throw new Error('the url setting contains a control character')
+  if (CONTROL.test(endpoint.apiKey)) throw new Error('the apiKey setting contains a control character')
   let target: URL
   try {
     target = new URL(endpoint.url)
   } catch {
-    throw new Error(`not a URL: ${endpoint.url}`)
+    throw new Error('the url setting is not a URL')
   }
   if (target.protocol !== 'http:' && target.protocol !== 'https:') throw new Error(`refusing ${target.protocol} url`)
   const quote = (v: string) => `"${v.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
-  const lines = [`url = ${quote(endpoint.url)}`]
+  const lines = [`url = ${quote(target.href)}`]
   if (endpoint.apiKey) {
     lines.push(`header = ${quote(`authorization: Bearer ${endpoint.apiKey}`)}`, `header = ${quote(`x-api-key: ${endpoint.apiKey}`)}`)
   }
@@ -743,23 +771,30 @@ function curlConfig(endpoint: Endpoint, body: string, maxSeconds: number): strin
     'header = "anthropic-version: 2023-06-01"',
     'request = "POST"',
     'header = "content-type: application/json"',
-    `data-raw = ${quote(body)}`,
   )
-  const host = target.hostname
-  if (host === '127.0.0.1' || host === 'localhost' || host === '[::1]') lines.push('noproxy = "*"')
-  lines.push(
-    'no-buffer',
-    'silent',
-    'show-error',
-    'connect-timeout = 15',
-    `max-time = ${maxSeconds}`,
-    'write-out = "\\n%{http_code}"',
-  )
+  // The body is inline for a small request; a large one is piped on fd 3 and named on curl's command
+  // line (`--data-binary @/dev/fd/3`), so it never enters a config line or a file.
+  if (body !== undefined) lines.push(`data-raw = ${quote(body)}`)
+  if (noProxyHost(target.hostname)) lines.push('noproxy = "*"')
+  lines.push('no-buffer', 'silent', 'show-error', 'connect-timeout = 15', 'write-out = "\\n%{http_code}"')
   return lines.join('\n')
 }
 
+/** The user's Claude config folder: CLAUDE_CONFIG_DIR, else the home folder's .claude. */
+async function configDir($: EngineInterface): Promise<string> {
+  const dir = await $.env.get('CLAUDE_CONFIG_DIR')
+  if (dir) return dir
+  const home = (await $.env.get('HOME')) || (await $.env.get('USERPROFILE'))
+  return `${home ?? ''}/.claude`
+}
+
+/** Text from a server for a person to read: no terminal colours or other control characters (C0 and
+ *  C1), the newlines kept. */
+const serverText = (text: string): string =>
+  text.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '').replace(/[\u0000-\u0009\u000b-\u001f\u007f\u0080-\u009f]/g, '')
+
 type LocalUsage = { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number }
-type LocalCall = { id: string; name: string; json: string }
+type LocalCall = { id: string; name: string; json: string; delta?: boolean }
 type LocalAnswer = {
   thinking: string
   text: string
@@ -791,17 +826,138 @@ async function* localStream($: EngineInterface, endpoint: Endpoint, request: Rec
   // written there. Unset, nothing is written.
   const dumpDir = await $.env.get('PI_MODELS_DUMP')
   if (dumpDir) {
-    await $.process.run(['sh', '-c', 'umask 077; cat > "$1"', 'sh', `${dumpDir}/request-${Date.now()}.json`], {
-      stdin: JSON.stringify(request, null, 1),
-    })
+    const text = JSON.stringify(request, null, 1)
+    const path = `${dumpDir}/request-${Date.now()}.json`
+    try {
+      await $.process.run(['sh', '-c', 'umask 077; cat > "$1"', 'sh', path], { stdin: text })
+    } catch {
+      // No sh (Windows): the same file through the engine's write. Debugging only, so a failure is not
+      // the step's.
+      await $.fs.write(path, text).catch(() => undefined)
+    }
   }
-  const child = $.process.spawn({
-    argv: ['curl', '-K', '-'],
-    input: curlConfig(endpoint, JSON.stringify({ ...request, stream: true }), MAX_SECONDS),
-  })
+  const body = JSON.stringify({ ...request, stream: true })
+  const inline = body.length <= INLINE_BODY_LIMIT
+  const config = curlConfig(endpoint, inline ? body : undefined)
+  let child: ReturnType<typeof $.process.spawn>
+  try {
+    // A small body rides in the config line (so no shell is needed, as on Windows); a large one is
+    // piped: the config, key included, comes to curl from a shell builtin, and the body on fd 3, so
+    // neither is ever an argument or a file. `printf` is a builtin in sh, dash and bash. The engine's
+    // stdin is a socket, which Linux can't reopen as /dev/fd/3, so `cat` turns it into a pipe first.
+    child = inline
+      ? $.process.spawn({ argv: ['curl', '-K', '-'], input: config })
+      : $.process.spawn({
+          // The shell drops the variable before starting cat and curl, so only sh's own environment holds it.
+          argv: ['sh', '-c', 'c=$PI_MODELS_CURL_CONFIG; unset PI_MODELS_CURL_CONFIG; cat | { exec 3<&0; printf "%s" "$c" | curl -K - --data-binary @/dev/fd/3; }', 'sh'],
+          env: { PI_MODELS_CURL_CONFIG: config },
+          input: body,
+        })
+  } catch (err) {
+    if (!inline) {
+      out.error = `requests over the inline limit need sh (${String(err).slice(0, 200)})`
+      return out
+    }
+    throw err
+  }
+  // SSE framing accepts CRLF and bare CR as line endings. A trailing CR waits for the next piece (it
+  // may pair with an LF); at the end of the stream it is a line ending too, so the last event is read.
+  async function* drain(final: boolean) {
+    if (pending.endsWith('\r')) {
+      pending = final ? pending.replace(/\r\n?/g, '\n') : `${pending.slice(0, -1).replace(/\r\n?/g, '\n')}\r`
+    } else {
+      pending = pending.replace(/\r\n?/g, '\n')
+    }
+    let stopped = false
+    for (let cut = pending.indexOf('\n\n'); cut >= 0; cut = pending.indexOf('\n\n')) {
+      const raw = pending.slice(0, cut)
+      pending = pending.slice(cut + 2)
+      const data = raw
+        .split('\n')
+        .filter(l => l.startsWith('data:'))
+        .map(l => l.slice(5).trimStart())
+        .join('')
+      if (!data) continue
+      let ev: any
+      try {
+        ev = JSON.parse(data)
+      } catch {
+        continue
+      }
+      if (ev.type === 'message_start') {
+        // The input count is sent once, at the start; a delta carries only the output count.
+        if (ev.message?.usage) out.usage = { ...ev.message.usage }
+      } else if (ev.type === 'content_block_start') {
+        const cb = ev.content_block ?? {}
+        const b: { type: string; index?: number; call?: LocalCall } = { type: String(cb.type) }
+        blocks.set(ev.index, b)
+        if (cb.type === 'tool_use') {
+          const input = cb.input
+          const whole = input && typeof input === 'object' && Object.keys(input).length > 0
+          b.call = { id: String(cb.id), name: String(cb.name), json: whole ? JSON.stringify(input) : '' }
+        }
+      } else if (ev.type === 'content_block_delta') {
+        const b = blocks.get(ev.index)
+        const d = ev.delta ?? {}
+        if (!b) continue
+        if (d.type === 'thinking_delta' && d.thinking) {
+          out.thinking += d.thinking
+          yield { kind: 'thinking' as const, index: indexOf(b), text: String(d.thinking) }
+        } else if (d.type === 'text_delta' && d.text) {
+          out.text += d.text
+          yield { kind: 'text' as const, index: indexOf(b), text: String(d.text) }
+        } else if (d.type === 'input_json_delta' && b.call) {
+          // Deltas spell the input out whole, so they replace one a start block already carried. An
+          // empty delta does not start that: a start block's whole input must survive it.
+          const partial = String(d.partial_json ?? '')
+          if (partial !== '') {
+            if (!b.call.delta) {
+              b.call.delta = true
+              b.call.json = ''
+            }
+            b.call.json += partial
+          }
+        }
+      } else if (ev.type === 'content_block_stop') {
+        // A tool call goes to the engine whole, so a stream cut short never leaves half of one.
+        const b = blocks.get(ev.index)
+        if (b?.call) {
+          b.call.json = cleanArgs(b.call.name, b.call.json || '{}')
+          out.calls.push(b.call)
+          yield { kind: 'tool' as const, index: indexOf(b), id: b.call.id, name: b.call.name }
+          yield { kind: 'input' as const, index: indexOf(b), json: b.call.json }
+        }
+      } else if (ev.type === 'message_delta') {
+        out.stopReason = ev.delta?.stop_reason ?? out.stopReason
+        if (ev.usage) out.usage = { ...(out.usage ?? {}), ...ev.usage }
+      } else if (ev.type === 'message_stop') {
+        ended = true
+        stopped = true
+      } else if (ev.type === 'error') {
+        out.error = `the server reported: ${serverText(String(ev.error?.message ?? data)).slice(0, 300)}`
+        stopped = true
+      }
+      if (stopped) break
+    }
+    return stopped
+  }
+  let stoppedStream = false
+  let started = false
   try {
     for (;;) {
-      const piece = await child.next()
+      let piece: Awaited<ReturnType<typeof child.next>>
+      try {
+        piece = await child.next()
+      } catch (err) {
+        // A spawn rejects its first pull when the command cannot start: for the piped form that is a
+        // missing `sh`, which the person can act on. A later rejection is an ordinary failure.
+        if (!inline && !started) {
+          out.error = `requests over the inline limit need sh (${String(err).slice(0, 200)})`
+          break
+        }
+        throw err
+      }
+      started = true
       if (piece.done) {
         code = piece.value?.code ?? null
         break
@@ -811,71 +967,26 @@ async function* localStream($: EngineInterface, endpoint: Endpoint, request: Rec
         continue
       }
       pending += piece.value.text
-      for (let cut = pending.indexOf('\n\n'); cut >= 0; cut = pending.indexOf('\n\n')) {
-        const raw = pending.slice(0, cut)
-        pending = pending.slice(cut + 2)
-        const data = raw
-          .split('\n')
-          .filter(l => l.startsWith('data:'))
-          .map(l => l.slice(5).trimStart())
-          .join('')
-        if (!data) continue
-        let ev: any
-        try {
-          ev = JSON.parse(data)
-        } catch {
-          continue
-        }
-        if (ev.type === 'content_block_start') {
-          const cb = ev.content_block ?? {}
-          const b: { type: string; index?: number; call?: LocalCall } = { type: String(cb.type) }
-          blocks.set(ev.index, b)
-          if (cb.type === 'tool_use') b.call = { id: String(cb.id), name: String(cb.name), json: '' }
-        } else if (ev.type === 'content_block_delta') {
-          const b = blocks.get(ev.index)
-          const d = ev.delta ?? {}
-          if (!b) continue
-          if (d.type === 'thinking_delta' && d.thinking) {
-            out.thinking += d.thinking
-            yield { kind: 'thinking' as const, index: indexOf(b), text: String(d.thinking) }
-          } else if (d.type === 'text_delta' && d.text) {
-            out.text += d.text
-            yield { kind: 'text' as const, index: indexOf(b), text: String(d.text) }
-          } else if (d.type === 'input_json_delta' && b.call) {
-            b.call.json += d.partial_json ?? ''
-          }
-        } else if (ev.type === 'content_block_stop') {
-          // A tool call goes to the engine whole, so a stream cut short never leaves half of one.
-          const b = blocks.get(ev.index)
-          if (b?.call) {
-            b.call.json = cleanArgs(b.call.name, b.call.json || '{}')
-            out.calls.push(b.call)
-            yield { kind: 'tool' as const, index: indexOf(b), id: b.call.id, name: b.call.name }
-            yield { kind: 'input' as const, index: indexOf(b), json: b.call.json }
-          }
-        } else if (ev.type === 'message_delta') {
-          out.stopReason = ev.delta?.stop_reason ?? out.stopReason
-          if (ev.usage) out.usage = ev.usage
-        } else if (ev.type === 'message_stop') {
-          ended = true
-        } else if (ev.type === 'error') {
-          out.error = `the server reported: ${String(ev.error?.message ?? data).slice(0, 300)}`
-        }
+      if (yield* drain(false)) {
+        stoppedStream = true
+        break
       }
     }
   } finally {
-    // Leaving early (the step was interrupted) ends curl too.
+    // Leaving early (the step was interrupted, or the stream said it was done) ends curl too.
     if (code === null) await child.return(undefined as never).catch(() => undefined)
   }
+  // A bare CR held at the end of the stream is a line ending; read the last event before the status.
+  if (!stoppedStream) yield* drain(true)
   // After the stream comes write-out's "\n<status>"; before it, the error body when the server refused.
-  const cut = pending.lastIndexOf('\n')
-  const status = Number(pending.slice(cut + 1))
-  if (out.error === undefined) {
+  if (out.error === undefined && !ended) {
+    const cut = pending.lastIndexOf('\n')
+    const status = Number(pending.slice(cut + 1))
     if (status !== 200 && status > 0) {
-      out.error = `local model server answered ${status}: ${pending.slice(0, Math.max(0, cut)).trim().slice(0, 300)}`
+      out.error = `local model server answered ${status}: ${serverText(pending.slice(0, Math.max(0, cut))).trim().slice(0, 300)}`
     } else if (code !== 0) {
-      out.error = `curl exited ${code ?? 'on a signal'}: ${stderr.trim().slice(-300) || 'no output'}`
-    } else if (!ended) {
+      out.error = `curl exited ${code ?? 'on a signal'}: ${serverText(stderr).trim().slice(-300) || 'no output'}`
+    } else {
       out.error = 'the stream ended before the answer was complete'
     }
   }
@@ -895,18 +1006,20 @@ const SUMMARY_PROMPT =
   'Summarize the conversation above for the agent that continues it. Cover: the goal and constraints the user gave; decisions made and why; the files, commands, identifiers, numbers and results that matter, with exact paths and values; what is done, what is in progress, and the next steps. Plain sentences, under 600 words, no preamble.'
 
 // An agent file's body is the agent's system prompt under Claude; a local agent gets it too, after the
-// session's prompt. Project agents win over the user's, as in Claude Code.
+// session's prompt. Its frontmatter's `model:` says which model the agent runs, which after a plugin
+// reload is the only record of a local agent's model. Project agents win over the user's, as in Claude
+// Code.
 // shortcut: reads the project's and the user's agents folders, not a plugin's agents; add those if asked.
-const agentBodies = new Map<string, string>()
+type AgentDefinition = { body: string; model: string }
+const agentBodies = new Map<string, AgentDefinition>()
 const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/
-async function agentBody($: EngineInterface, agentId: string): Promise<string> {
+async function agentDefinition($: EngineInterface, agentId: string): Promise<AgentDefinition> {
   const known = agentBodies.get(agentId)
   if (known !== undefined) return known
   const type = (await $.agent.list()).find(a => a.id === agentId)?.type
-  let body = ''
+  let def: AgentDefinition = { body: '', model: '' }
   if (type) {
-    const userDir = (await $.env.get('CLAUDE_CONFIG_DIR')) || `${await $.env.get('HOME')}/.claude`
-    const dirs = [`${await $.session.root()}/.claude/agents`, `${userDir}/agents`]
+    const dirs = [`${await $.session.root()}/.claude/agents`, `${await configDir($)}/agents`]
     search: for (const dir of dirs) {
       for (const f of await $.fs.list(dir).catch(() => [])) {
         if (!f.name.endsWith('.md')) continue
@@ -914,14 +1027,17 @@ async function agentBody($: EngineInterface, agentId: string): Promise<string> {
         const [, head = '', rest = ''] = m ?? []
         const name = head.match(/^name:\s*["']?([^"'\r\n]+?)["']?\s*$/m)?.[1]
         if (m && name === type) {
-          body = rest.trim()
+          def = {
+            body: rest.trim(),
+            model: head.match(/^model:\s*["']?([^"'\r\n]+?)["']?\s*$/m)?.[1] ?? '',
+          }
           break search
         }
       }
     }
   }
-  agentBodies.set(agentId, body)
-  return body
+  agentBodies.set(agentId, def)
+  return def
 }
 
 /** The system prompt a routed step gets: the engine's own composition for this model and these tools,
@@ -931,11 +1047,11 @@ async function stepSystem($: EngineInterface, model: string, served: string, too
   let base: string
   try {
     const { sections } = await $.prompt.compose({ model, tools: tools.map(t => t.function.name) })
-    base = sections.map(s => s.text).join('\n\n')
+    base = asModel(sections.map(s => s.text).join('\n\n'), served)
   } catch {
     base = DEFAULT_SYSTEM
   }
-  const body = agentId ? await agentBody($, agentId) : ''
+  const body = agentId ? (await agentDefinition($, agentId)).body : ''
   return `${base}${body ? `\n\n${body}` : ''}${poweredBy(served)}`
 }
 
@@ -956,19 +1072,22 @@ async function summarize(
   // The steps' own system prompt and tools, so the whole conversation is a cached prefix and only the
   // request at its end is new; tool_choice "none" keeps the tools in the prompt but out of the answer.
   const tools = await localTools($, isMain)
-  const wanted = 'high'
-  const effort = refusedEfforts.has(`${endpoint.url} ${served} ${wanted}`) ? undefined : wanted
-  const stream = localStream($, endpoint, {
-    model: served,
-    system: await stepSystem($, model, served, tools),
-    ...(tools.length > 0 ? { tools: anthropicTools(tools), tool_choice: { type: 'none' } } : {}),
-    messages: [
-      ...toVllm(undefined, history as Message[], reasoning, served),
-      { role: 'user', content: [{ type: 'text', text: `${SUMMARY_SYSTEM}\n\n${ask}` }] },
-    ],
-    max_tokens: Math.min(endpoint.maxTokens, SUMMARY_MAX_TOKENS),
-    ...(effort ? { output_config: { effort } } : {}),
-  })
+  // No output_config: the server's own default effort applies, so a template that refuses an effort
+  // level cannot break compaction.
+  const stream = localStream(
+    $,
+    endpoint,
+    {
+      model: served,
+      system: await stepSystem($, model, served, tools, agentId),
+      ...(tools.length > 0 ? { tools: anthropicTools(tools), tool_choice: { type: 'none' } } : {}),
+      messages: [
+        ...toVllm(history as Message[], reasoning, served),
+        { role: 'user', content: [{ type: 'text', text: `${SUMMARY_SYSTEM}\n\n${ask}` }] },
+      ],
+      max_tokens: Math.min(endpoint.maxTokens, SUMMARY_MAX_TOKENS),
+    },
+  )
   let step = await stream.next()
   while (!step.done) step = await stream.next()
   const res = step.value
@@ -991,9 +1110,19 @@ const refusedEffort = (res: { error?: string; text: string; thinking: string; ca
   !res.text && !res.thinking && res.calls.length === 0
 
 const reasoning = new Map<string, string>()
+// A conversation longer than this replays without its oldest thinking, rather than growing the map
+// for the session's whole life.
+function remember(key: string, thought: string): void {
+  reasoning.set(key, thought)
+  while (reasoning.size > REASONING_LIMIT) {
+    const oldest = reasoning.keys().next()
+    if (oldest.done) return
+    reasoning.delete(oldest.value)
+  }
+}
 
-// The model a routed loop runs, by loop (`main` or an agent id), so a compaction can answer in the
-// model's own name even when no step has run in this process.
+// The model each loop's last step ran, by loop (`main` or an agent id), local or not, so a compaction
+// knows whether the loop is local and answers in the model's own name.
 const loopModel = new Map<string, string>()
 
 const emptyResult = (e: { turnId: string; index: number }) => ({
@@ -1005,22 +1134,43 @@ async function* failChunks(reason: string) {
   yield { kind: 'stop' as const, stopReason: 'end_turn' as const, usage: null }
 }
 
+// The store write trails the changes: one prompt renders many descriptions at once, and the hook must
+// not wait for the disk. The pending time, not the timer handle, is what says a write waits: a refused
+// timer leaves no handle, and a pending this old is treated as stale so the next change asks again.
+const PERSIST_STALE_MS = 5000
+let persistSince: number | undefined
+function persistDescriptions($: EngineInterface): void {
+  const now = Date.now()
+  if (persistSince !== undefined && now - persistSince < PERSIST_STALE_MS) return
+  persistSince = now
+  try {
+    $.clock.after(1000, () => {
+      persistSince = undefined
+      // A failed write only loses a cache of descriptions.
+      void $.store.set('toolDescriptions', Object.fromEntries(fullDescriptions)).catch(() => undefined)
+    })
+  } catch {
+    // no timer: pending-since goes stale, and a later change asks again
+  }
+}
+
 export const register: Register = (on, options) => {
   const endpoint: Endpoint = {
     url: typeof options.url === 'string' && options.url.trim() !== '' ? options.url.trim() : 'http://127.0.0.1:8000/v1/messages',
-    apiKey: typeof options.apiKey === 'string' ? options.apiKey : '',
+    apiKey: typeof options.apiKey === 'string' ? options.apiKey.trim() : '',
     maxTokens: (() => {
       const n = Math.floor(Number(options.maxTokens))
       return Number.isFinite(n) && n > 0 ? n : 32000
     })(),
   }
 
-  // Every tool's description as the engine renders it, kept whole for the local model's tool list.
+  // Every tool's description as the engine renders it, kept whole for the local model's tool list. An
+  // MCP tool the local model is not offered has no use here.
   on('tool.describe', async ($, e, next) => {
     const r = await next(e)
-    if (fullDescriptions.get(e.tool) !== r.description) {
+    if ((!e.tool.startsWith('mcp__') || offeredTools.has(e.tool)) && fullDescriptions.get(e.tool) !== r.description) {
       fullDescriptions.set(e.tool, r.description)
-      await $.store.set('toolDescriptions', Object.fromEntries(fullDescriptions))
+      persistDescriptions($)
     }
     return r
   })
@@ -1032,14 +1182,33 @@ export const register: Register = (on, options) => {
     const model = await $.session.model()
     if (!isLocal(model)) return { text }
     const name = `${servedName(model)} (local)`
-    return { text: text.replace(/(Co-Authored-By: )[^<\n]*<noreply@anthropic\.com>/gi, `$1${name} <noreply@invalid>`) }
+    // A function, so a `$` in the name is text rather than a replacement pattern.
+    return { text: text.replace(/(Co-Authored-By: )[^<\n]*<noreply@anthropic\.com>/gi, (_m, lead: string) => `${lead}${name} <noreply@invalid>`) }
   })
 
   on('session.compact', async ($, e, next) => {
     // The main loop's current model may be set without a step having run in this process (a resumed
     // session compacted at once), so ask the session; an agent is mid-run, so its last step says.
-    const sessionModel = e.agentId === undefined ? await $.session.model() : undefined
-    const model = e.agentId ? loopModel.get(e.agentId) : isLocal(sessionModel ?? '') ? sessionModel : undefined
+    // Nothing may throw before the Claude-loop fallthrough below: a failed hook would hand a local
+    // loop's compaction to the engine, which sends it to Anthropic.
+    let model: string | undefined
+    try {
+      if (e.agentId === undefined) {
+        const sessionModel = await $.session.model()
+        model = isLocal(sessionModel ?? '') ? sessionModel : undefined
+      } else {
+        // After /reload-plugins the loop map is empty though the agent is still mid-run: its type's file
+        // says which model it runs. One that names none (or `inherit`, or a built-in type) runs on its
+        // parent's model, which may be local: unknown then, so it stays unchanged until its next step.
+        const known = loopModel.get(e.agentId) ?? (await agentDefinition($, e.agentId)).model
+        if (isLocal(known)) model = known
+        else if ((!known || known === 'inherit') && isLocal((await $.session.model()) ?? '')) {
+          return { skip: 'pi-models: this agent\'s model is unknown until its next step; the conversation is unchanged' }
+        }
+      }
+    } catch (err) {
+      return { skip: `pi-models: cannot tell which model compacts (${String(err).slice(0, 200)}); the conversation is unchanged` }
+    }
     if (model === undefined) return next(e) // a Claude loop: the engine compacts it as usual
     if (e.trigger === 'precompute') return { skip: 'not precomputed for the local model' }
     try {
@@ -1056,6 +1225,11 @@ export const register: Register = (on, options) => {
     } catch (err) {
       return { skip: `compaction by the local model failed (${String(err).slice(0, 200)}); the conversation is unchanged` }
     }
+  }).catch(async ($, e, next) => {
+    // A Claude loop's own compaction failure is the engine's to report: replay it. Only a failure of
+    // this plugin's local path (nothing beneath ran) becomes a skip.
+    if (next.called) return next(e)
+    return { skip: 'pi-models: compaction failed; the conversation is unchanged' }
   })
 
   on('turn.step', async function* ($, e, next) {
@@ -1063,11 +1237,8 @@ export const register: Register = (on, options) => {
     // every other model's steps pass through untouched.
     const isMain = e.agentId === undefined
     const loop = e.agentId ?? 'main'
-    if (!isLocal(e.model)) {
-      loopModel.delete(loop)
-      return yield* next(e)
-    }
     loopModel.set(loop, e.model)
+    if (!isLocal(e.model)) return yield* next(e)
 
     const served = servedName(e.model)
     const empty = (text: string) => ({
@@ -1082,18 +1253,18 @@ export const register: Register = (on, options) => {
       ? await $.session.messages({ as: 'api' })
       : await $.session.messages({ agentId: e.agentId!, as: 'api' })
     if (!Array.isArray(history)) {
-      yield* fail(`cannot read the agent's conversation (${history.deny})`)
-      return empty('')
+      const reason = `cannot read the agent's conversation (${history.deny})`
+      yield* fail(reason)
+      return empty(`local: ${reason}`)
     }
     const tools = await localTools($, isMain)
     const system = await stepSystem($, e.model, served, tools, e.agentId)
-    const task = undefined
     const wanted = typeof e.effort === 'string' ? e.effort : undefined
     const refusal = `${endpoint.url} ${served} ${wanted}`
     const request = (effort: string | undefined) => ({
       model: served,
       system,
-      messages: toVllm(task, history as Message[], reasoning, served),
+      messages: toVllm(history as Message[], reasoning, served),
       ...(tools.length > 0 ? { tools: anthropicTools(tools) } : {}),
       max_tokens: endpoint.maxTokens,
       ...(effort ? { output_config: { effort } } : {}),
@@ -1110,7 +1281,7 @@ export const register: Register = (on, options) => {
       const stopReason = res.calls.length > 0 ? ('tool_use' as const) : ('end_turn' as const)
       yield { kind: 'text' as const, index: res.nextIndex, text: note }
       yield { kind: 'stop' as const, stopReason, usage: null }
-      for (const c of res.calls) reasoning.set(c.id, res.thinking)
+      for (const c of res.calls) remember(c.id, res.thinking)
       return {
         turnId: e.turnId,
         index: e.index,
@@ -1122,8 +1293,8 @@ export const register: Register = (on, options) => {
     }
 
     const calls = [...res.calls]
-    for (const c of calls) reasoning.set(c.id, res.thinking)
-    if (calls.length === 0 && res.text) reasoning.set(`text:${res.text}`, res.thinking)
+    for (const c of calls) remember(c.id, res.thinking)
+    if (calls.length === 0 && res.text) remember(`text:${res.text}`, res.thinking)
 
     const stopReason: 'tool_use' | 'max_tokens' | 'end_turn' =
       calls.length > 0 ? 'tool_use' : res.stopReason === 'max_tokens' ? 'max_tokens' : 'end_turn'
@@ -1151,7 +1322,8 @@ export const register: Register = (on, options) => {
     // shortcut: the note takes block 0, assuming the hook had yielded nothing (its throws come before
     // the stream); track the next index if a mid-stream throw ever shows up.
     if (!isLocal(e.model)) return yield* next(e)
-    yield* failChunks(`pi-models: the step failed (${next.error.kind}${next.error.message ? `: ${next.error.message.slice(0, 200)}` : ''})`)
-    return emptyResult(e)
+    const note = `pi-models: the step failed (${next.error.kind}${next.error.message ? `: ${next.error.message.slice(0, 200)}` : ''})`
+    yield* failChunks(note)
+    return { ...emptyResult(e), answer: note }
   })
 }

@@ -33,12 +33,15 @@ const GUIDELINES: Record<string, string> = {
 }
 
 // Tools whose schemas stay in the prompt: Pi's four, ToolSearch to reach the rest, Code Mode's two,
-// and ExitPlanMode so plan mode can end. Every other tool waits behind ToolSearch.
-const IN_FRONT = new Set(['Read', 'Bash', 'Edit', 'Write', 'ToolSearch', 'REPL', 'Poll', 'ExitPlanMode'])
+// ExitPlanMode so plan mode can end, and SubagentHandback so a subagent can report without loading it.
+const IN_FRONT = new Set(['Read', 'Bash', 'Edit', 'Write', 'ToolSearch', 'REPL', 'Poll', 'ExitPlanMode', 'SubagentHandback'])
 // In Code Mode the model is given only these two; everything else runs inside its scripts.
 const CODE_MODE_TOOLS = ['REPL', 'Poll']
 // Engine sections kept under Pi's prompt: auto memory's instructions and a chosen output style.
 const KEPT_SECTIONS = new Set(['memory', 'output_style'])
+// Another plugin's section (`<plugin>:<name>`) is kept too: pi replaces Claude Code's prompt, not
+// another plugin's.
+const keptSection = (id: string): boolean => KEPT_SECTIONS.has(id) || (id.includes(':') && !id.startsWith('claude-pi:'))
 
 export const register: Register = on => {
   on('tool.describe', async (_$, e, next) => {
@@ -73,7 +76,7 @@ export const register: Register = on => {
         },
         { id: 'claude-pi:tools', scope: 'session' as const, text: `<tools>\n${tools}\n\nAdditional tools may be available.\n</tools>` },
         { id: 'claude-pi:rules', scope: 'session' as const, text: `<rules>\n${rules.map(r => `- ${r}`).join('\n')}\n</rules>` },
-        ...sections.filter(s => KEPT_SECTIONS.has(s.id)).map(s => ({ ...s, scope: 'session' as const })),
+        ...sections.filter(s => keptSection(s.id)).map(s => ({ ...s, scope: 'session' as const })),
         { id: 'claude-pi:cwd', scope: 'session' as const, text: `<cwd>\n${await $.session.cwd()}\n</cwd>` },
       ],
     }
