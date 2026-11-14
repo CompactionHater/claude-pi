@@ -3,7 +3,7 @@ import type { Register } from 'claude-code'
 // claude-pi: Claude Code with the lean harness of pi (github.com/earendil-works/pi, MIT).
 // Pi's tool descriptions and rules, project instructions as the only context, and a short tool list
 // in front; every other tool stays one ToolSearch away. Claude Code's own lean prompt is kept where
-// the model has one, without two off-topic sections; the long prompt older models get is replaced by
+// the model has one, without its off-topic sections; the long prompt older models get is replaced by
 // Pi's. Works in Code Mode too.
 
 // Pi's tool descriptions, adapted where Claude Code's parameters differ: Edit takes
@@ -24,8 +24,9 @@ const SNIPPETS: Record<string, string> = {
   ToolSearch: 'Load a tool that is not listed here, by name or keyword',
 }
 
-// Pi's guidelines per tool.
+// Pi's guidelines per tool, in the order they appear.
 const GUIDELINES: Record<string, string> = {
+  Bash: 'Use Bash for file operations like ls, rg, find',
   Read: 'Use Read to examine files instead of cat or sed.',
   Edit: 'Use Edit for targeted changes (old_string must match exactly and uniquely).',
   Write: 'Use Write only for new files or complete rewrites.',
@@ -62,15 +63,14 @@ export const register: Register = on => {
     const { sections } = await next(e)
     if (e.traits.includes('bare')) return { sections }
     const rules = [
-      ...(e.tools.includes('Bash') ? ['Use Bash for file operations like ls, rg, find'] : []),
-      ...e.tools.flatMap(t => (GUIDELINES[t] ? [GUIDELINES[t]] : [])),
+      ...Object.keys(GUIDELINES).filter(t => e.tools.includes(t)).map(t => GUIDELINES[t]),
       'Be concise in your responses',
       'Show file paths clearly when working with files',
     ]
     const rulesSection = { id: 'claude-pi:rules', scope: 'session' as const, text: `<rules>\n${rules.map(r => `- ${r}`).join('\n')}\n</rules>` }
     // Claude Code's lean prompt (the `lean` trait: Opus 4.8 and later, Sonnet and Haiku 5.5, Fable,
     // unknown models; Code Mode always has it) is about 6,200 characters, and ZCode (top on
-    // FrontierHarness v1.1) sends every model almost the same text. It is kept, without two off-topic
+    // FrontierHarness v1.1) sends every model almost the same text. It is kept, without its off-topic
     // sections, and Pi's rules follow its shared part. Only the long prompt (about 27,500) is replaced.
     if (e.traits.includes('lean')) {
       const kept = sections.filter(s => !DROPPED_SECTIONS.has(s.id))

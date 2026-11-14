@@ -23,7 +23,7 @@ Install one or both. Then run `/reload-plugins`, or start a new session. Needs C
 
 | | Claude Code | With pi |
 |---|---|---|
-| System prompt on Opus 4.8 and later, Sonnet and Haiku 5.5, Fable, and models Claude Code doesn't know | Claude Code's lean prompt, about 6,200 characters | The same without its two off-topic sections (pronouns, recreating existing games), plus pi's rules: about 5,900 |
+| System prompt on Opus 4.8 and later, Sonnet and Haiku 5.5, Fable, and models Claude Code doesn't know | Claude Code's lean prompt, about 6,200 characters | The same without its off-topic sections (pronouns, and recreating existing games where the model has it), plus pi's rules: about 5,900 |
 | System prompt on older models | Claude Code's long prompt, about 27,500 characters | pi's prompt: one role line, a tool list, a few rules, the working directory, plus Claude Code's sections listed below |
 | Tools sent with every request, on Opus 5.5 | 12 tools, about 34,700 characters of schemas | Read, Bash, Edit, Write and ToolSearch, about 6,500 characters |
 | Other tools | Some behind ToolSearch | All behind ToolSearch: the model loads one when it needs it |
@@ -32,7 +32,7 @@ Install one or both. Then run `/reload-plugins`, or start a new session. Needs C
 
 Measured on Claude Code 2.1.325 in an interactive session in an empty folder: the first request's prompt, tools and context go from about 52,200 characters to 23,800 on Opus 5.5, and from about 89,700 to 33,200 on Sonnet 4.6. On Sonnet 4.6 most of the saving is tools: pi's prompt keeps auto memory's instructions, which are about 12,800 characters there. A project's CLAUDE.md and skills add the same to both; MCP servers add less with pi, which puts their tools behind ToolSearch.
 
-Claude Code's lean prompt is kept because it is already short and almost all of it is about coding, and because ZCode, the top harness across five open models on [FrontierHarness](https://frontierharness.org) v1.1, sends every model almost the same text. pi removes its two sections that aren't about coding and adds its own rules: use Bash for `ls`, `rg` and `find`, Read instead of `cat`, Edit for targeted changes, Write only for new files or rewrites, be concise, and show file paths. Where pi's prompt replaces the long one, it keeps these sections of Claude Code's: auto memory's instructions, a chosen output style, the note that a long conversation is summarized rather than ended, "when you have enough information to act, act", and the token countdown below.
+Claude Code's lean prompt is kept because it is already short and almost all of it is about coding, and because ZCode, the top harness across five open models on [FrontierHarness](https://frontierharness.org) v1.1, sends every model almost the same text. pi removes its sections that aren't about coding and adds its own rules: use Bash for `ls`, `rg` and `find`, Read instead of `cat`, Edit for targeted changes, Write only for new files or rewrites, be concise, and show file paths. Where pi's prompt replaces the long one, it keeps these sections of Claude Code's: auto memory's instructions, a chosen output style, the note that a long conversation is summarized rather than ended, "when you have enough information to act, act", and the token countdown below.
 
 Kept as they are:
 
@@ -189,13 +189,13 @@ Before you turn pi-models off, switch to a Claude model and remove your `local/`
 
 pi's `plugins/pi/hooks/register.ts` registers three hooks:
 
-- `prompt.compose` keeps Claude Code's lean prompt, without its `pronouns` and `original_games` sections, and adds pi's rules after its first part. On a model that gets the long prompt it replaces it with pi's, keeping the `memory`, `output_style`, `context_management`, `act_dont_rederive` and `total_tokens` sections and the sections other mods add.
+- `prompt.compose` keeps Claude Code's lean prompt, without its `pronouns` and `original_games` sections, and adds pi's rules after `lean_body`, its shared part. On a model that gets the long prompt it replaces it with pi's, keeping the `memory`, `output_style`, `context_management`, `act_dont_rederive` and `total_tokens` sections and the sections other mods add.
 - `tool.describe` gives Read, Bash, Edit and Write pi's descriptions, and puts every tool outside the short list behind ToolSearch.
 - `prompt.context` keeps CLAUDE.md and drops the other context blocks.
 
 pi-models' `plugins/pi-models/hooks/register.ts` registers four:
 
-- `turn.step` answers each step on a `local/` model. It sends your server the conversation, the system prompt Claude Code composes (Claude Code's own, or pi's on a model that gets the long prompt), the agent's instructions and the tools it can use, then streams the answer back into Claude Code.
+- `turn.step` answers each step on a `local/` model. It sends your server the conversation, the system prompt Claude Code composes (Claude Code's own as pi edits it, or pi's on a model that gets the long prompt), the agent's instructions and the tools it can use, then streams the answer back into Claude Code.
 - `session.compact` has your model summarize its own conversation.
 - `tool.describe` records each tool's description as Claude Code renders it, unchanged.
 - `attribution.text` names your model in commit trailers when it is the main model.
