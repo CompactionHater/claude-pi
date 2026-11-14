@@ -189,7 +189,7 @@ pi-models' `plugins/pi-models/hooks/register.ts` registers four:
 
 pi sends nothing anywhere. pi-models sends requests only to the endpoint you configure. Its settings, the API key included, are readable by any other mod you install, as every mod's are.
 
-To check them yourself, run `claude plugin validate` on either plugin's folder in a clone. Claude Code writes the type definitions `tsc` needs (`.claude-plugin/types/`) when it first loads a plugin, so type-check a clone after loading it once, for example with `claude --plugin-dir plugins/pi-models`.
+To check them yourself, run `claude plugin validate` on either plugin's folder in a clone. Claude Code writes the type definitions `tsc` needs (`.claude-plugin/types/`) when an interactive session first loads a plugin from your folder, so open one session first, for example with `claude --plugin-dir plugins/pi-models` (`claude -p` does not write them).
 
 ## Credits
 
