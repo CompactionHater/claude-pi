@@ -2,7 +2,7 @@
 
 Two mods for Claude Code, installed with slash commands:
 
-- **pi** gives Claude Code the lean harness of [pi](https://github.com/earendil-works/pi): pi's system prompt and tool descriptions, project instructions as the only context, and a short tool list.
+- **pi** gives Claude Code the lean harness of [pi](https://github.com/earendil-works/pi): a short tool list with pi's tool descriptions, project instructions as the only context, and pi's system prompt where Claude Code would send its long one.
 - **pi-models** lets you use any model served by an Anthropic-compatible endpoint (vLLM, llama.cpp, Ollama, LM Studio, a gateway) beside Claude, as the main model or as an agent.
 
 Each works on its own, and they work together. Neither needs a launcher script or a patched binary: both use Claude Code's mods API.
@@ -23,19 +23,22 @@ Install one or both. Then run `/reload-plugins`, or start a new session. Needs C
 
 | | Claude Code | With pi |
 |---|---|---|
-| System prompt | Claude Code's full prompt | pi's prompt: one role line, a tool list, a few rules, the working directory |
-| Tools sent with every request | 14 tools, about 79,000 characters of schemas | Read, Bash, Edit, Write and ToolSearch, about 6,400 characters |
-| Other tools | Listed in full | Behind ToolSearch: the model loads one when it needs it |
+| System prompt on Opus 4.8 and later, Sonnet and Haiku 5.5, Fable | Claude Code's lean prompt, about 6,200 characters | The same, unchanged |
+| System prompt on older models | Claude Code's long prompt, about 27,500 characters | pi's prompt: one role line, a tool list, a few rules, the working directory, plus Claude Code's sections listed below |
+| Tools sent with every request | 12 tools, about 34,700 characters of schemas on Opus 5.5 | Read, Bash, Edit, Write and ToolSearch, about 6,500 characters |
+| Other tools | Some behind ToolSearch | All behind ToolSearch: the model loads one when it needs it |
 | Context in the first message | CLAUDE.md, your email, today's date | CLAUDE.md only |
 | Tool descriptions | Claude Code's | pi's, adapted to Claude Code's parameters |
 
-Measured on Claude Code 2.1.325 with Opus 5.5: about 88,600 characters of prompt and tool schemas per request become about 10,900.
+Measured on Claude Code 2.1.325 in an interactive session in an empty folder: the first request's prompt, tools and context go from about 52,200 characters to 24,100 on Opus 5.5, and from about 89,700 to 33,200 on Sonnet 4.6. A project's CLAUDE.md, skills and MCP servers add the same to both.
+
+Claude Code's lean prompt is kept because it is already short, and because ZCode, the top harness across five open models on [FrontierHarness](https://frontierharness.org) v1.1, sends every model nearly the same prompt, word for word. Where pi's prompt replaces the long one, it keeps these sections of Claude Code's: auto memory's instructions, a chosen output style, the note that a long conversation is summarized rather than ended, "when you have enough information to act, act", and the token countdown below.
 
 Kept as they are:
 
 - Every tool still works. Agent, AskUserQuestion, WebSearch, Skill, MCP tools and the rest are one ToolSearch away.
 - Subagents keep their own prompts.
-- Auto memory, a chosen output style and other mods keep their instructions.
+- Other mods keep their prompt sections.
 - Permissions, hooks, skills, slash commands and CLAUDE.md are unchanged.
 
 Claude Code still adds a few lines the mods API doesn't reach, such as notes for the Artifact and WebSearch tools and the commit attribution reminder.
@@ -144,11 +147,21 @@ To see exactly what is sent, start Claude Code with `PI_MODELS_DUMP` set to a fo
 PI_MODELS_DUMP=/tmp/pi-models-dump claude
 ```
 
+## Token countdown
+
+Claude Code can tell the model how many tokens it has left: `<total_tokens>15000000 tokens left</total_tokens>` in the system prompt, then a lower count after each tool result. By default it does this only for some Claude models, not for Opus 5.5, Sonnet 5.5, Fable 5.2 or models it doesn't know. ZCode sends it to every model. To turn it on for every model, add this to the `env` block of `~/.claude/settings.json` and start a new session:
+
+```json
+{ "env": { "CLAUDE_CODE_TOTAL_TOKENS_REMINDER": "padded-countdown" } }
+```
+
+pi keeps the countdown in its prompt, and pi-models passes it to your model. The setting is one Claude Code marks as internal, so a later version may change it.
+
 ## Code Mode
 
 Both mods work with Claude Code's [Code Mode](https://code.claude.com/docs/en/code-mode), where the model writes JavaScript that calls its tools. In Code Mode the model gets two tools, REPL and Poll.
 
-- **pi** lists those two in pi's style and adds pi's codemode rule: batch independent calls, chain them, and filter large output inside one script. Tools behind ToolSearch show by name only in REPL's declarations, which cuts REPL's description from about 33,500 to 22,600 characters.
+- **pi** keeps Claude Code's lean prompt, as every Code Mode model has it. Tools behind ToolSearch show by name only in REPL's declarations, which cuts REPL's description from about 33,500 to 22,600 characters.
 - **pi-models** gives your model the same two tools, so it drives Code Mode as Claude does.
 
 Code Mode is Claude Code's own feature, and neither mod turns it on. To try it, add this to `~/.claude/settings.json` and start a new session:
@@ -176,7 +189,7 @@ Before you turn pi-models off, switch to a Claude model and remove your `local/`
 
 pi's `plugins/pi/hooks/register.ts` registers three hooks:
 
-- `prompt.compose` replaces the system prompt's sections with pi's. It keeps Claude Code's `memory` and `output_style` sections, and the sections other mods add.
+- `prompt.compose` leaves Claude Code's lean prompt as it is. On a model that gets the long prompt it replaces it with pi's, keeping the `memory`, `output_style`, `context_management`, `act_dont_rederive` and `total_tokens` sections and the sections other mods add.
 - `tool.describe` gives Read, Bash, Edit and Write pi's descriptions, and puts every tool outside the short list behind ToolSearch.
 - `prompt.context` keeps CLAUDE.md and drops the other context blocks.
 

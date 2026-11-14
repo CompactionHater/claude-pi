@@ -1,8 +1,9 @@
 import type { Register } from 'claude-code'
 
 // claude-pi: Claude Code with the lean harness of pi (github.com/earendil-works/pi, MIT).
-// Pi's system prompt, Pi's tool descriptions, project instructions as the only context, and a short
-// tool list in front; every other tool stays one ToolSearch away. Works in Code Mode too.
+// Pi's tool descriptions, project instructions as the only context, and a short tool list in front;
+// every other tool stays one ToolSearch away. Claude Code's own lean prompt is kept where the model
+// has one; the long prompt older models get is replaced by Pi's. Works in Code Mode too.
 
 // Pi's tool descriptions, adapted where Claude Code's parameters differ: Edit takes
 // old_string/new_string (Pi: edits[]), Bash's timeout is in milliseconds (Pi: seconds).
@@ -37,8 +38,10 @@ const GUIDELINES: Record<string, string> = {
 const IN_FRONT = new Set(['Read', 'Bash', 'Edit', 'Write', 'ToolSearch', 'REPL', 'Poll', 'ExitPlanMode', 'SubagentHandback'])
 // In Code Mode the model is given only these two; everything else runs inside its scripts.
 const CODE_MODE_TOOLS = ['REPL', 'Poll']
-// Engine sections kept under Pi's prompt: auto memory's instructions and a chosen output style.
-const KEPT_SECTIONS = new Set(['memory', 'output_style'])
+// Engine sections kept under Pi's prompt: auto memory's instructions, a chosen output style, the
+// note that a long conversation is summarized rather than ended, the "act, don't re-derive" line and
+// the token countdown (CLAUDE_CODE_TOTAL_TOKENS_REMINDER).
+const KEPT_SECTIONS = new Set(['memory', 'output_style', 'context_management', 'act_dont_rederive', 'total_tokens'])
 // Another plugin's section (`<plugin>:<name>`) is kept too: pi replaces Claude Code's prompt, not
 // another plugin's.
 const keptSection = (id: string): boolean => KEPT_SECTIONS.has(id) || (id.includes(':') && !id.startsWith('claude-pi:'))
@@ -58,7 +61,10 @@ export const register: Register = on => {
 
   on('prompt.compose', async ($, e, next) => {
     const { sections } = await next(e)
-    if (e.traits.includes('bare')) return { sections }
+    // Claude Code's lean prompt (the `lean` trait: Opus 4.8 and later, Sonnet and Haiku 5.5, Fable) is
+    // about 6,000 characters and is what ZCode, the top harness on FrontierHarness v1.1, sends every
+    // model: it stays as it is. Only the long prompt (about 27,000) is replaced.
+    if (e.traits.includes('bare') || e.traits.includes('lean')) return { sections }
     const shown = e.tools.includes('REPL') ? CODE_MODE_TOOLS : e.tools.filter(t => IN_FRONT.has(t) && t in SNIPPETS)
     const rules = [
       ...(shown.includes('Bash') ? ['Use Bash for file operations like ls, rg, find'] : []),
